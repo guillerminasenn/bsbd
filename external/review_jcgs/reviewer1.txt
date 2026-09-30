@@ -1,0 +1,128 @@
+Review: “Bayesian Semi-Blind Deconvolution at
+Scale”
+September 15, 2026
+1 Summary
+This manuscript focuses on a Bayesian model for semi-blind de-convolution
+described in Senn et al. (2025). This is a challenging task where not only the
+true image is unknown but also the convolution filter. By exploiting conjugacy
+relations between the various prior and likelihood components, together with
+the focus on cyclic lattices, the posterior can be efficiently explored through a
+Gibbs sampler that relies heavily on the use of the fast Fourier transform (FFT)
+and its inverse (IFFT).
+From the computational perspective, this manuscript presents two improve-
+ments over Senn et al. (2025): an increased use of the FFT, and an alternative
+update of the blur that uses a marginal conditional instead of the usual full
+conditional. According to the experimental results, there is some evidence that
+the marginal version helps in dealing with multimodality issues that arise when
+there is little data available.
+While I think the subject of the manuscript is interesting and relevant to
+JCGS, in my opinion the two improvements described above are not important
+enough to justify publishing a new paper. I expand on this and other issues in
+the following comments. Excerpts from the manuscript are emphasized.
+2 Major comments
+As I mentioned above, the main issue with this manuscript is the lack of
+substantial work that is not already found in Senn et al. (2025). A side-by-side
+comparison shows that almost everything in the paper up to Section 4.1 can
+be found in the 2025 paper (Section 4.2 describes the marginal HMC sampler
+which is new). If there are new contributions up to Section 4.1, they are hard to
+detect because the bulk of the text is dedicated to explaining things that are
+already in Senn et al. (2025). A new version of the present manuscript should
+avoid repetition of previous work as much as possible, and anything that must
+be included should be placed in Section 2 (preliminaries) so that readers can
+clearly distinguish the novel contributions from past work. Moreover, a new
+1
+version should at the very least attempt a more thorough empirical examination
+of the pros and cons of the two competing samplers.
+On a more technical note, I think there may be a theoretical problem with the
+way the Gaussian field is defined on the cyclic lattice. Following Borovitskiy et al.
+(2020), the so-called naive generalization of a Gaussian process in Euclidean
+space to a compact manifold, where the Euclidean norm is simply substituted
+with the geodesic distance, does not yield a positive definite kernel. But this is
+precisely what Senn et al. (2025) and the present manuscript do to build the
+Gaussian field on the flat torus (i.e., the cyclic lattice). In a practical numerical
+implementation, this would show up as negative eigenvalues that need to be
+truncated to 0 in order to avoid taking the square root of a negative number
+(see line 2 in Algorithm 2 of the manuscript).
+Interestingly, Borovitskiy et al. (2020) show that for the flat torus, the
+naive generalization is correct to a first order approximation, which means that
+for short length scales and/or large embedding grids the resulting covariance
+matrices may be positive definite. This is the same phenomenon that underlies
+the circulant embedding technique for sampling general stationary Gaussian
+random fields (Graham et al., 2018). Thus, when the authors justify the use of
+an embedding lattice to remove boundary effects, they should also mention that
+a larger embedding is needed to handle non-definiteness issues that may show
+with sufficiently large length scales.
+An alternative that completely elides the non-definiteness issue is to work
+with the conditional autoregressive model CAR( ρ,σ 2) with ρ∈ [0, 1), which
+yields positive definite precision—and thus covariance—matrices regardless of
+the graph being considered (Gelfand and Vounatsou, 2003, Section 3).
+3 Minor comments
+Section 1
+Comment 1: P.1 L9–10: “...reflectivity image, well reflectivity, noise and
+seismic wavelet...” . These terms are not known in the statistical community.
+They should first be explained before being discussed.
+Comment 2: P.4 L50–51: book citations need to include a pointer to the
+section that contains the claim; e.g., (Liu, 2008, Section X.Y.Z). This happens
+multiple times in the manuscript, with Liu’s book but also with Davis’ and Rue
+& Held.
+Section 2
+Comment 3: P.5 L39–40: using p(x) to denote the density of a parametrized
+family like Nn(µ, Σ) is bad practice, because there are multiple dimensions,
+means, and covariance parameters considered in this study. For example, a fairly
+2
+common approach is to write Nn(x;µ, Σ) for such a density; many other options
+are possible.
+Comment 4: P.5 L46–49: consider adding a citation for these formulas or a
+short proof. I think that statisticians are more aware of the case of a multivariate
+normal vector z = (z1,z 2) and the conditional distribution of z2 given z1 is
+conditioned on either of its components (see e.g. Mardia et al., 1979, Thm 3.2.4),
+which in turn can be used to get Eq (3).
+Comment 5: P.5 L56–57: the error does not enter the formula for the covari-
+ance matrix so the value of the error cannot affect the rank.
+Comment 6: P.6 L15–16: cite Rue and Held (2005, Section 2.3.3)
+Comment 7: Eq 7: The matrices Fn and F H
+n are interchanged; see Davis
+(1979, Eq. 3.2.7). Also happens in P.8 L14–15.
+Comment 8: P. 8 L45–46: formula for the mn eigenvalues is wrong, should
+be λC =√mn (Fm⊗Fn)Hvec(Π).
+Comment 9: Algorithm 2: this is essentially Algorithm 2.10 in Rue and Held
+(2005), cite it. Note that page 65 of that book states clearly that the assumption
+is that the precision (and thus the covariance) matrix is symmetric positive
+definite.
+Section 3
+Comment 10: Most of this section is from Senn et al. (2025), so it should go
+in Section 2 if absolutely necessary.
+Section 4
+Comment 11: Section 4.1 is mostly all in Senn et al. (2025), so it should be
+placed in Section 2 if absolutely necessary.
+Section 5
+Comment 12: Figure 2: I think this figure is nice but it doesn’t quite convey
+the message that the HMC version is better at handling the multimodality. It
+would be nice have another plot that focused only on the most volatile index of
+the blur vector so that a traditional histogram could be shown. A sampler that
+truly overcomes the multimodality issue would have roughly half of its samples
+on each mode. This fact cannot be easily assessed from Fig 2.
+Comment 13: P. 28 L21–22: typo, should be “lattice”.
+3
+Comment 14: Section 5.2: Would it be possible to do a similar analysis as in
+the previous section where some of the exact observations are withheld? This
+would help showcase the benefits of the HMC version.
+References
+Borovitskiy, V., Terenin, A., Mostowsky, P., and Deisenroth, M. (2020). Mat´ ern
+Gaussian processes on Riemannian manifolds. In Larochelle, H., Ranzato, M.,
+Hadsell, R., Balcan, M., and Lin, H., editors, Advances in Neural Information
+Processing Systems, volume 33, pages 12426–12437. Curran Associates, Inc.
+Davis, P. J. (1979). Circulant matrices. Wiley, New York.
+Gelfand, A. E. and Vounatsou, P. (2003). Proper multivariate conditional
+autoregressive models for spatial data analysis. Biostatistics, 4(1):11–15.
+Graham, I. G., Kuo, F. Y., Nuyens, D., Scheichl, R., and Sloan, I. H. (2018).
+Analysis of circulant embedding methods for sampling stationary random
+fields. SIAM Journal on Numerical Analysis , 56(3):1871–1895.
+Mardia, K. V., Kent, J. T., and Bibby, J. M. (1979). Multivariate analysis .
+Probability and mathematical statistics. Academic Press, London.
+Rue, H. and Held, L. (2005). Gaussian Markov random fields: Theory and
+applications. Monographs on statistics and applied probability. Chapman &
+Hall/CRC, Boca Raton.
+Senn, G., Walker, M., and Tjelmeland, H. (2025). Scalable Bayesian seismic
+wavelet estimation. Geophysical Prospecting, 73(5):1635–1650.
+4

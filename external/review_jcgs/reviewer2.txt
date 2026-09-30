@@ -1,0 +1,71 @@
+General Comments
+The authors depict a Bayesian model and inference algorithm for deconvolutions of potentially noisy
+and partially observed images. The emphasis is on computation and the authors are exceptionally
+detailed in the mathematics and practicalities of the algorithm: a reader could quite reasonably
+implement the method using this manuscript.
+However, the innovations over Senn et al. (2025) are not clear. From the Introduction of
+the manuscript: “ Our contribution is threefold. First, we formulate the model outside its original
+seismic setting. Second, we derive an explicit eigenvalue-based representation of the posterior com-
+putations and Gibbs sampler, so that the main updates can be implemented directly in the spectral
+domain. Third, we introduce a marginal blur update obtained by analytically integrating out the
+image from the joint blur-image conditional and sampling the resulting marginal blur conditional
+with Hamiltonian Monte Carlo (HMC). ”
+Substantial movement on this first point is critical, since JCGS is not a geophysical journal.
+The method needs to be formulated and applicable outside of the original seismic application.
+But the assumptions of 1) a vertical/horizontal separable prior, 2) row-uniform observations, and
+3) a 1-dimensional convolution kernel would be prohibitive for any other canonical deconvolution
+application (Gaussian, defocus, motion blur, such as in the seminal papers cited in the current
+manuscript, Levin et al., (2009); Babacan et al., (2012); Orieux et al., (2010); Park et al., (2012)).
+These assumptions are buried within the middle of the manuscript (except for the 1D kernel, which
+is in the abstract) and are in conflict with the title, “ Bayesian Semi-Blind Deconvolution at Scale ”
+and the general 2D deconvolution statement in equation 1, which suggest a very general method
+to a researcher searching the literature. The method is only tested on simulated 1D images (for
+which all the above restrictions are vaccuous) and a seismic dataset with a single well observation.
+For a statistics journal, the paper would be much improved by relaxing the above restrictions and
+demonstrating applicability in another domain.
+On the second and third contributions, the benefit of Gibbs updates in the spectral domain over
+Senn et al. (2025) is never explicitly stated, and the collapsed HMC update provides improvements
+in limited scenarios, by the authors’ admission. But the weight of any improvements on these fronts
+is entirely conditional of the applicability of the method.
+Specific Comments
+1. Reading the paper in sequence, I found Section 2.1 confusing and over-engineered, primarily
+because the reasons behind the formulation (which are good reasons!) are not apparent until
+much later in the manuscript.
+The authors introduce the general linear Gaussian model y =Ax +e and the conditional
+distribution forx|y. But later the authors supposee = 0,A is a selector matrix (soAx =xc),
+and Ax = b (so xc = b). At first read, this raises the question “Why not just sample
+xu|(xc = b)?”. Quantities A and e seem like dead weight, and the dismissed alternative,
+forming the singular N(µ∗, Σ∗) and sampling, is a straw man, since the obvious competitor
+is the non-singular conditional for xu.
+Algorithm 1 is attractive, but not for the reasons given in Section 2.1: the unconstrained
+covariance is circulant (Sections 3 & 4), so Step 1 of Algorithm 1 is cheap, while subset-
+ting destroys that structure with little reduction in dimension if k≪ n. The reason given,
+that conditioning by Kriging “can be computationally efficient for k < n ”, is not true for a
+generic matrix, where conditioning by Kriging is actually strictly worse than the partitioned
+1
+conditional.
+Further, the authors handle two different cases, one where A is a selector and e = 0 and
+another where A is general and e∼ N(0, Σe). So the general equation is truly warranted,
+but this is not clear in Section 2.1.
+I encourage the authors to clearly delineate the two cases they will deal with and forecast
+why Algorithm 1 will be preferable to the more obvious xu|(xc =b) sampler.
+2. Page 7, Line 31 : Should be “Hermitian transpose”, or conjugate transpose, which is more
+common.
+3. Equations 5 and 9, the conjugate transpose should be on the right F n. Further, the eigen-
+values just below Equation 9 are missing a √mn factor.
+4. Page 8, Line 4 and 17 : “eigenvalue-based operations”? I do not think that is a standard
+term. The listed operations end up only affecting the eigenvalues (because of the shared
+eigenvectors), but that’s a consequence, not a definition for that set of operations.
+5. Section 2.3 : Would the authors please justify their choice of a horizontal-vertical separability?
+In general, this is a limiting choice for a generic spatial field, and is not required for a circulant
+embedding (Wood and Chan, 1994, Dietrich and Newsam, 1997). It may be appropriate for
+the intended geophysical application, however. Also, the order Σh⊗Σv, assumes thex lattice
+is vectorized column-major, which probably should be stated explicitly in the manuscript.
+6. Page 11, Line 1: “ We assume that the additional image information consists in m exactly
+observed pixels at the same rows of a subset of columns in the image ”. It would be best to write
+this out explicitly and mathematically. But more importantly, this is highly restrictive, and
+buried in the middle of the paper. Again, perhaps this restriction is fine for the geophysical
+application (wells within an area tend to be drilled to a standardized depth?), but it would
+be prohibitive elsewhere.
+7. Page 11, Paragraph 2: Again, a 1D stationary blur kernel is very restrictive...
+2
