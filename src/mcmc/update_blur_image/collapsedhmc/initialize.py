@@ -31,6 +31,9 @@ def _initialize_collapsed_hmc(sampler, **kwargs):
     sigma2p = kwargs.get('sigma2p', 1)
     precondition = kwargs.get('precondition', None)
     p_collapsed_hmc = kwargs.get('p_collapsed_hmc', 0.5)
+    gradient = kwargs.get('gradient', 'legacy')
+    if gradient not in ('legacy', 'legacy_fixed', 'adjoint'):
+        raise Exception(f"Unknown gradient variant '{gradient}'.")
 
     if verbose:
         print(f"Initializing collapsed HMC with epsilon={epsilon}, L={L}, sigma2p={sigma2p}.")
@@ -41,7 +44,8 @@ def _initialize_collapsed_hmc(sampler, **kwargs):
         'L': L,
         'sigma2p': sigma2p,
         'precondition': precondition,
-        'p_collapsed_hmc': p_collapsed_hmc
+        'p_collapsed_hmc': p_collapsed_hmc,
+        'gradient': gradient
     }
 
     # Initialize the history of the params to the initial param value
@@ -58,6 +62,14 @@ def _initialize_collapsed_hmc(sampler, **kwargs):
         
     # Create dictionary to store matrix products involving derivatives and constant across iterations
     sampler.aux_derivatives = {}
+
+    # The adjoint gradient needs none of the derivative tensors below; free the
+    # heavy model-level ones (built at setup) and skip the legacy-only arrays.
+    if gradient == 'adjoint':
+        wd = sampler.par_objs['w'].wavelet_derivatives
+        for key in ('d_W0', 'd_W', 'bases_d_W', 'bases_d_WT', 'fft2_bases_d_W', 'fft2_bases_d_WT'):
+            wd[key] = None
+        return
 
     # Build gamma = G @ d_w_star_i (used in gradients for blur-kernel wavelet updates)
     _w = sampler.par_objs['w']

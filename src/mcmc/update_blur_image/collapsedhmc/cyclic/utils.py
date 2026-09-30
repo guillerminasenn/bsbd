@@ -24,11 +24,17 @@ from scipy import linalg
 from src.utils.model_utils import embed_wu
 from src.mcmc.update_blur_image.collapsedhmc.cyclic.gradient_potential import gradient_potential_Fourier_domain
 from src.mcmc.update_blur_image.collapsedhmc.cyclic.potential import potential
+from src.mcmc.update_blur_image.collapsedhmc.cyclic.adjoint import gradient_potential_adjoint, potential_adjoint
 
 verbose_d = False
 verbose_leap = False
 
 pp = 4
+
+GRADIENT_VARIANTS = ('legacy', 'legacy_fixed', 'adjoint')
+
+def _gradient_variant(sampler):
+    return sampler.mcmc_config['collapsed_hmc'].get('gradient', 'legacy')
 
 # Utils (ongoing work)
 def leapfrog_collapsed_c(sampler, i, w_star, p, L, epsilon,
@@ -57,8 +63,20 @@ def leapfrog_collapsed_c(sampler, i, w_star, p, L, epsilon,
     if verbose: 
         print('\n############    L. Inside leapfrog.   #############')
     
-    # Import the gradient of the potential
-    grad_potential = gradient_potential_Fourier_domain
+    # Select the gradient of the potential; for 'adjoint', keep the shared
+    # quantities of the last evaluation so log_ar_hmc_collapsed_c can reuse
+    # them in the two potential evaluations.
+    variant = _gradient_variant(sampler)
+    if variant == 'adjoint':
+        adjoint_common = {}
+        def grad_potential(s, i_, w):
+            g, adjoint_common['last'] = gradient_potential_adjoint(s, i_, w, return_common=True)
+            return g
+    elif variant == 'legacy_fixed':
+        def grad_potential(s, i_, w):
+            return gradient_potential_Fourier_domain(s, i_, w, fix_aliasing=True)
+    else:
+        grad_potential = gradient_potential_Fourier_domain
     
     # Extract Gaussian objects to sample from priors and likelihood
     _lik = sampler.par_objs['d']
@@ -77,6 +95,8 @@ def leapfrog_collapsed_c(sampler, i, w_star, p, L, epsilon,
     # 1. Make a half step for momentum 
     print('Half step for momentum:') if verbose else None
     gp = grad_potential(sampler, i, w_star)
+    if variant == 'adjoint':
+        sampler.aux['adjoint_common_cur'] = adjoint_common['last']  # evaluated at w_star
     p_star_t = p_star - 0.5 * epsilon * gp
     if verbose: 
         print(f'Momentum at t=0 (center values) =\n{p_star[(nv//2 - 5):(nv//2 + 5), :]}')
@@ -117,6 +137,8 @@ def leapfrog_collapsed_c(sampler, i, w_star, p, L, epsilon,
     # 3. Make a half step for momentum at the end.
     if verbose: print('Make a half step for momentum at the end.\n')
     gp = grad_potential(sampler, i, w_star_t)
+    if variant == 'adjoint':
+        sampler.aux['adjoint_common_prop'] = adjoint_common['last']  # evaluated at w_star_t (the proposal)
     print(f'Momentum at t=L-1/2 =\n{p_star_t[(nv//2 - 5):(nv//2 + 5), :]}') if verbose else None
     p_star_t = p_star_t - 0.5 * epsilon * gp
     if verbose: 
@@ -163,9 +185,16 @@ def log_ar_hmc_collapsed_c(sampler, i,
     if verbose: print('\n\n#####    AR. Inside log_ar_hmc_collapsed_c    #####')
     
     # Compute the ratio
-    cur_U = float(potential(sampler, i, w_star_cur, verbose=verbose))
+    if _gradient_variant(sampler) == 'adjoint':
+        # Reuse the shared quantities computed by the first/last gradient of the leapfrog
+        cur_U = float(potential_adjoint(sampler, i, w_star_cur,
+                                        common=sampler.aux.pop('adjoint_common_cur', None)))
+        prop_U = float(potential_adjoint(sampler, i, w_star_prop,
+                                         common=sampler.aux.pop('adjoint_common_prop', None)))
+    else:
+        cur_U = float(potential(sampler, i, w_star_cur, verbose=verbose))
+        prop_U = float(potential(sampler, i, w_star_prop, verbose=verbose))
     cur_K = float(kinetic(sampler, i, p_cur, verbose=verbose))
-    prop_U = float(potential(sampler, i, w_star_prop, verbose=verbose))
     prop_K = float(kinetic(sampler, i, p_prop, verbose=verbose))
     log_ratio = float(cur_U - prop_U + cur_K - prop_K)
     
