@@ -30,10 +30,16 @@ def _initialize_collapsed_hmc(sampler, **kwargs):
     L = kwargs.get('L', 10)
     sigma2p = kwargs.get('sigma2p', 1)
     precondition = kwargs.get('precondition', None)
+    mass_matrix = kwargs.get('mass_matrix', None)
     p_collapsed_hmc = kwargs.get('p_collapsed_hmc', 0.5)
     gradient = kwargs.get('gradient', 'legacy')
     if gradient not in ('legacy', 'legacy_fixed', 'adjoint'):
         raise Exception(f"Unknown gradient variant '{gradient}'.")
+    if precondition not in (None, 'prior', 'posterior'):
+        raise Exception(f"Unknown precondition '{precondition}'.")
+    if precondition == 'posterior' and mass_matrix is None:
+        raise Exception("precondition='posterior' requires a 'mass_matrix' "
+                        "(see mass_matrix.estimate_mass_matrix).")
 
     if verbose:
         print(f"Initializing collapsed HMC with epsilon={epsilon}, L={L}, sigma2p={sigma2p}.")
@@ -44,6 +50,7 @@ def _initialize_collapsed_hmc(sampler, **kwargs):
         'L': L,
         'sigma2p': sigma2p,
         'precondition': precondition,
+        'mass_matrix': mass_matrix,
         'p_collapsed_hmc': p_collapsed_hmc,
         'gradient': gradient
     }
@@ -211,6 +218,12 @@ def _create_momentum_object(sampler):
         if scipy.sparse.issparse(mass_correlation_matrix):
             mass_correlation_matrix = mass_correlation_matrix.toarray()  # stored as csr; Covariance needs dense
         print(f"Using prior preconditioning with mass_correlation_matrix shape: {mass_correlation_matrix.shape}") if verbose else None
+    elif precondition == 'posterior':
+        sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
+        mass_correlation_matrix = np.asarray(sampler.mcmc_config['collapsed_hmc']['mass_matrix'])
+        if mass_correlation_matrix.shape != (dim_p, dim_p):
+            raise Exception(f"mass_matrix must be {(dim_p, dim_p)}, got {mass_correlation_matrix.shape}.")
+        print(f"Using posterior preconditioning with mass_matrix shape: {mass_correlation_matrix.shape}") if verbose else None
     else:
         sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
         mass_correlation_matrix = np.eye(dim_p)
