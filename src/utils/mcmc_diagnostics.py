@@ -9,7 +9,7 @@ import numpy as np
 
 
 def compute_autocorrelation(x: np.ndarray, max_lag: int) -> np.ndarray:
-    """Compute autocorrelation for a centered 1D series up to max_lag."""
+    """Compute autocorrelation for a centered 1D series up to max_lag (FFT-based)."""
     x = np.asarray(x)
     if x.ndim != 1:
         raise ValueError("Input must be a 1D array")
@@ -22,10 +22,12 @@ def compute_autocorrelation(x: np.ndarray, max_lag: int) -> np.ndarray:
     if variance == 0:
         return np.zeros(max_lag + 1)
 
-    acf = np.zeros(max_lag + 1)
+    # acf[lag] = sum(x[lag:] * x[:-lag]) / ((n - lag) * var); zero-pad to avoid circular wrap
+    nfft = 1 << int(np.ceil(np.log2(2 * n)))
+    f = np.fft.rfft(x, nfft)
+    c = np.fft.irfft(f * np.conj(f), nfft)[:max_lag + 1]
+    acf = c / ((n - np.arange(max_lag + 1)) * variance)
     acf[0] = 1.0
-    for lag in range(1, max_lag + 1):
-        acf[lag] = np.sum(x[lag:] * x[:-lag]) / ((n - lag) * variance)
     return acf
 
 
