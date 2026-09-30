@@ -1,0 +1,227 @@
+% Covariance validity on circulant lattices, and the role of separability.
+% Standalone note; compile with pdflatex. Sections are written so they can be
+% \input into the supplementary material.
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath, amssymb, booktabs}
+\usepackage[round]{natbib}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dft}{\operatorname{DFT}}
+\title{Valid covariance functions on circulant lattices,\\ and what the FFT
+  algebra actually requires}
+\author{}
+\date{2026-09-30}
+
+\begin{document}
+\maketitle
+
+\section{Setting and the reviewers' point}
+
+The manuscript builds stationary correlation matrices on a cyclic lattice by
+composing a Euclidean correlation function with the great-circle (wrap-around)
+distance: with $h_{ik} = \min(|i-k|,\, n-|i-k|)$,
+\begin{equation} \label{eq:naive}
+  R_{ik} \;=\; \rho(h_{ik}), \qquad
+  \rho(h) = \exp\{-(h/\phi)^p\}, \quad p \in (0, 2],
+\end{equation}
+(eq.~(correlation) in the paper, with ``$p=2$ induces smooth realizations'').
+The reviewers correctly note that \eqref{eq:naive} is not a valid construction
+in general: a function that is positive definite (PD) on $\R$ does not remain
+PD after composition with the geodesic distance on a circle. In the
+experiments this was handled by keeping $\phi$ small enough that the matrix
+was numerically SPD. This note summarizes the relevant theory, checks which
+published experiments were affected (none, it turns out), and proposes
+concrete modifications.
+
+\section{When is a circulant correlation matrix valid?}
+
+On the cyclic group $\Z_n$ the answer is exact and cheap to check. A
+stationary correlation on $\Z_n$ is a circulant matrix $R$ with base
+$r = (r_0, \dots, r_{n-1})$, $r_h = \rho(h)$, and its eigenvalues are the DFT
+of the base. The discrete analogue of Bochner's theorem (the Herglotz
+theorem; see, e.g., \citealp[Ch.~4]{BrockwellDavis1991}) states:
+\begin{quote}
+  $R$ is a valid (positive semidefinite) covariance on $\Z_n$ \emph{iff}
+  $\dft(r)_k \ge 0$ for all $k = 0, \dots, n-1$.
+\end{quote}
+Since the code already computes $\dft(r)$ to do FFT algebra, validity can and
+should be asserted at construction time for free.
+
+\section{Four provably valid constructions}
+
+\paragraph{(a) Restrict the smoothness exponent: $p \in (0, 1]$.}
+\citet{Gneiting2013} (building on \citealp{Schoenberg1942}) characterizes the
+isotropic PD functions on spheres $S^d$; the circle $S^1$ contains every
+$\Z_n$ as a subset, so PD on $S^1$ implies PD on $\Z_n$ with great-circle
+distance. The powered exponential $\exp\{-(h/\phi)^p\}$ is PD on all spheres
+\emph{iff} $p \in (0, 1]$, and the geodesic Mat\'ern is PD \emph{iff}
+$\nu \le 1/2$. This explains the numerical table below: the paper's $p=1$
+choices (image and noise correlations) are valid \emph{at every range
+$\phi$}, whereas $p = 1.98$ (blur prior) is not a valid model on the circle
+and fails numerically once $\phi$ is large relative to $n$.
+
+\paragraph{(b) Periodize (wrap) the Euclidean covariance.}
+For any PD, integrable $C$ on $\R$, the periodization
+\begin{equation} \label{eq:wrap}
+  C_{\mathrm{per}}(h) \;=\; \sum_{j \in \Z} C(h + jn)
+\end{equation}
+is PD on $\Z_n$: by Poisson summation, $\dft$ of the wrapped base samples the
+(nonnegative) spectral density of $C$. This is the classical device behind
+circulant embedding \citep{WoodChan1994, DietrichNewsam1997, Stein1999}. It
+preserves the Euclidean family's smoothness, so $p \to 2$ stays available. In
+practice two or three terms of \eqref{eq:wrap} suffice ($C$ decays fast), and
+the change to \texttt{exp\_cor} is one line:
+$r_h = \sum_{j=-J}^{J} \exp\{-(|h + jn|/\phi)^p\}$.
+
+\paragraph{(c) Chordal distance.}
+Composing any PD radial function on $\R^2$ with the \emph{chordal} distance
+$c(h) = \frac{n}{\pi}\sin(\pi h / n)$ (the straight-line distance between
+lattice points placed on a circle of circumference $n$) is PD
+\citep{Yadrenko1983, Gneiting2013}. This keeps the closed form
+$\exp\{-(c(h)/\phi)^p\}$ valid for all $p \in (0,2]$; chordal and great-circle
+distances agree to first order for $h \ll n$, so fitted ranges barely change.
+
+\paragraph{(d) Compact support within the half-period.}
+If $C$ is PD on $\R$ and supported on $[0, n/2)$ (e.g.\ Wendland or other
+compactly supported families; \citealp{Wendland1995, Gneiting2002}), then
+\eqref{eq:wrap} has a single term and the naive construction \eqref{eq:naive}
+is \emph{exactly} valid. This is the rigorous version of the ``keep $\phi$
+small'' workaround: for the powered exponential the support is infinite, so a
+small $\phi$ only makes the negative part of the spectrum exponentially
+small, never zero (for $p \approx 2$ the worst eigenvalue behaves like
+$-e^{-(n/2\phi)^2}$-ish; see the table). An alternative in the same spirit is
+the Gaussian Markov random field route: specify the \emph{precision} directly
+on the torus \citep{RueHeld2005}, which is valid by construction and keeps
+the circulant structure.
+
+\section{Are the published experiments affected?}
+
+Minimum circulant eigenvalue of the naive base \eqref{eq:naive} and of the
+wrapped base \eqref{eq:wrap}:
+
+\begin{center}
+\begin{tabular}{rrr rr}
+\toprule
+$n$ & $p$ & $\phi$ & min eig, naive & min eig, wrapped \\
+\midrule
+24 & 1.98 & 1.5  & $2.7\cdot 10^{-2}$ & $2.7\cdot 10^{-2}$ \\
+24 & 1.98 & 2.0  & $3.6\cdot 10^{-3}$ & $3.6\cdot 10^{-3}$ \\
+24 & 1.98 & 6.0  & $-1.5\cdot 10^{-2}$ & $2.6\cdot 10^{-4}$ \\
+24 & 1.98 & 10.0 & $-3.7\cdot 10^{-1}$ & $9.1\cdot 10^{-5}$ \\
+24 & 1.00 & 10.0 & $3.5\cdot 10^{-2}$ & $5.0\cdot 10^{-2}$ \\
+96 & 1.98 & 10.0 & $9.1\cdot 10^{-5}$ & $9.1\cdot 10^{-5}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The experiments use $p = 1$ with $\phi = 1.5$ for image and noise (valid by
+(a) at any range) and $p = 1.98$ with $\phi \in \{1.5, 2\}$ for the blur
+prior on $n_v \in \{24, \dots\}$, where the naive minimum eigenvalue is
+$\ge 3.6\cdot 10^{-3} > 0$. \textbf{All published experiments therefore used
+genuinely SPD matrices}; the issue is that the \emph{recipe} stated in the
+paper is not valid in general, and a referee can break it with $p=2$ and a
+larger $\phi$.
+
+\section{Suggested modifications to the paper and code}
+
+\begin{enumerate}
+\item \textbf{Eq.~(correlation) (Sec.~``Blur prior distribution'').} State the
+  validity condition once: ``a stationary correlation on the cyclic lattice
+  is valid iff the DFT of its base is nonnegative (Herglotz)''. Then present
+  the construction as either (a) $p \in (0,1]$ with great-circle distance
+  \citep{Gneiting2013}, or (b) the periodization \eqref{eq:wrap} of the
+  Euclidean powered exponential for $p \in (0,2]$, which we recommend since
+  the blur prior wants $p \approx 2$ smoothness. Drop ``choosing $p=2$
+  induces smooth realizations'' in favour of the wrapped version.
+\item \textbf{SM simulation details.} Note that the values used
+  ($p = 1.98, \phi \le 2$; $p = 1, \phi = 1.5$) give SPD matrices, so no
+  published result changes; for general use the wrapped form should be the
+  default.
+\item \textbf{Code.} In \texttt{src/utils/model\_utils.py::exp\_cor}
+  (circulant branch): replace the base by the $J$-term wrapped sum (b), and
+  assert \texttt{np.fft.fft(r).real.min() >= -tol} in
+  \texttt{Covariance.create\_exp\_cor\_matrix} so an invalid choice fails
+  loudly instead of corrupting a chain.
+\end{enumerate}
+
+\section{Separability and the Kronecker product (Reviewer 3, comment 5)}
+
+The reviewer asks why the image covariance is assumed separable
+($\bm{R}_c = \bm{R}_h \otimes \bm{R}_v$), suggesting the assumption is
+restrictive and perhaps unnecessary. The precise situation, verified against
+the implementation:
+
+\paragraph{What the FFT speedups actually need: stationarity, not
+separability.} Every matrix in the collapsed likelihood
+($A = W \Sigma_c W^{\top} + \Sigma_d$, $Z$, $B$, their inverses, determinants
+and mat-vecs) is manipulated only through the 2D DFT of its base. Any
+\emph{stationary} covariance on the torus yields a BCCB matrix, which the DFT
+diagonalizes whether or not it factorizes as a Kronecker product. The same
+holds for the Gibbs full conditionals and for the exact-observation
+correction (the gather $A_c C A_c^{\top}$ of a base column works for any
+BCCB). So the reviewer is right that the headline $O(n \log n)$ complexity
+does not require separability: a nonseparable wrapped 2D Mat\'ern would drop
+straight into most of the algebra.
+
+\paragraph{Where separability \emph{is} used.} Three places, all verified in
+the code: (i) the model is \emph{specified} through one-dimensional ranges
+$(\rho_v, \rho_h)$, i.e.\ separability is a modeling convenience for building
+$\bm{R}_c$ from 1D pieces; (ii) the constrained-image factorizations: after
+conditioning on a full well column, the conditional covariance of a separable
+field factorizes, and the stored $\bm{R}_v^{\star}, \bm{R}_h^{\star}$ (and
+the Cholesky factor $L$) exploit this; (iii) the sum-of-squares terms of the
+potential gradient use the factorization explicitly
+($K = P \bm{R}_h P^{\top}$, $X = \bm{R}_v^{\star} W_0^{\top}$, and the
+$\bm{R}_{cv}, \bm{R}_{ch}$ eigenvalue products in the legacy gradient).
+
+\paragraph{Suggested response / rewrite.} Introduce stationarity on the
+extended cyclic lattice as the essential assumption (with the validity
+condition of Sec.~2) when the model is first presented, and present
+separability as an explicit, secondary assumption adopted (i) to elicit the
+prior through directional ranges, and (ii) to obtain closed-form
+factorizations in the exact-observation algebra and the HMC gradient. It is
+fair to concede that the collapsed likelihood itself, and hence Gibbs and the
+HMC potential, extend verbatim to nonseparable stationary covariances; the
+gradient's sum-of-squares terms would need a (derivable) generalization. In
+short: the reviewer's instinct is correct for the core algebra and the paper
+overstated the role of the Kronecker product there, but separability is not
+vacuous either --- it is what makes the well-constraint and gradient terms
+cheap in the current implementation.
+
+\begin{thebibliography}{99}
+\bibitem[Brockwell and Davis(1991)]{BrockwellDavis1991}
+Brockwell, P.~J. and Davis, R.~A. (1991). \emph{Time Series: Theory and
+Methods}, 2nd ed. Springer. (Herglotz theorem, Ch.~4.)
+\bibitem[Dietrich and Newsam(1997)]{DietrichNewsam1997}
+Dietrich, C.~R. and Newsam, G.~N. (1997). Fast and exact simulation of
+stationary Gaussian processes through circulant embedding of the covariance
+matrix. \emph{SIAM J. Sci. Comput.} 18(4), 1088--1107.
+\bibitem[Gneiting(2002)]{Gneiting2002}
+Gneiting, T. (2002). Compactly supported correlation functions.
+\emph{J. Multivariate Anal.} 83(2), 493--508.
+\bibitem[Gneiting(2013)]{Gneiting2013}
+Gneiting, T. (2013). Strictly and non-strictly positive definite functions on
+spheres. \emph{Bernoulli} 19(4), 1327--1349.
+\bibitem[Rue and Held(2005)]{RueHeld2005}
+Rue, H. and Held, L. (2005). \emph{Gaussian Markov Random Fields: Theory and
+Applications}. Chapman \& Hall/CRC.
+\bibitem[Schoenberg(1942)]{Schoenberg1942}
+Schoenberg, I.~J. (1942). Positive definite functions on spheres.
+\emph{Duke Math. J.} 9(1), 96--108.
+\bibitem[Stein(1999)]{Stein1999}
+Stein, M.~L. (1999). \emph{Interpolation of Spatial Data: Some Theory for
+Kriging}. Springer.
+\bibitem[Wendland(1995)]{Wendland1995}
+Wendland, H. (1995). Piecewise polynomial, positive definite and compactly
+supported radial functions of minimal degree. \emph{Adv. Comput. Math.} 4,
+389--396.
+\bibitem[Wood and Chan(1994)]{WoodChan1994}
+Wood, A.~T.~A. and Chan, G. (1994). Simulation of stationary Gaussian
+processes in $[0,1]^d$. \emph{J. Comput. Graph. Statist.} 3(4), 409--432.
+\bibitem[Yadrenko(1983)]{Yadrenko1983}
+Yadrenko, M.~I. (1983). \emph{Spectral Theory of Random Fields}.
+Optimization Software, New York. (Chordal-distance construction.)
+\end{thebibliography}
+
+\end{document}
