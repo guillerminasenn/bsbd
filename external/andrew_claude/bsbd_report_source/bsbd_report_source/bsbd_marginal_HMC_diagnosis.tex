@@ -1,0 +1,397 @@
+\documentclass[10pt]{article}
+\usepackage[letterpaper,margin=0.85in,top=0.8in,bottom=0.85in]{geometry}
+\usepackage[utf8]{inputenc}
+
+\usepackage[expansion=false]{microtype}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\rfoot{\footnotesize\color{gray} bsbd marginal-HMC diagnosis --- page \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\setlist{nosep, leftmargin=1.4em}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\definecolor{codebg}{gray}{0.955}
+\lstset{basicstyle=\ttfamily\scriptsize, backgroundcolor=\color{codebg}, breaklines=true, breakatwhitespace=false,
+        columns=fullflexible, keepspaces=true, frame=none, xleftmargin=4pt, framexleftmargin=4pt,
+        showstringspaces=false, postbreak=\mbox{\textcolor{gray}{$\hookrightarrow$}\space}, tabsize=4, upquote=true}
+\lstdefinestyle{app}{basicstyle=\ttfamily\fontsize{6.9pt}{8.1pt}\selectfont, numbers=left, numberstyle=\tiny\color{gray}, numbersep=6pt, xleftmargin=18pt}
+
+% notation
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\bA}{\bm{A}}\newcommand{\bB}{\bm{B}}\newcommand{\bW}{\bm{W}}\newcommand{\bZ}{\bm{Z}}\newcommand{\bY}{\bm{Y}}
+\newcommand{\bS}{\bm{S}}\newcommand{\bL}{\bm{L}}\newcommand{\bM}{\bm{M}}\newcommand{\bK}{\bm{K}}\newcommand{\bX}{\bm{X}}
+\newcommand{\bV}{\bm{V}}\newcommand{\bD}{\bm{D}}\newcommand{\bE}{\bm{E}}\newcommand{\bI}{\bm{I}}\newcommand{\bR}{\bm{R}}
+\newcommand{\bU}{\bm{U}}\newcommand{\bG}{\bm{G}}\newcommand{\bQ}{\bm{Q}}\newcommand{\bP}{\bm{P}}
+\newcommand{\bd}{\bm{d}}\newcommand{\bv}{\bm{v}}\newcommand{\bw}{\bm{w}}\newcommand{\bc}{\bm{c}}\newcommand{\bq}{\bm{q}}
+\newcommand{\be}{\bm{e}}\newcommand{\bb}{\bm{b}}\newcommand{\bmu}{\bm{\mu}}\newcommand{\bom}{\bm{\omega}}
+\newcommand{\bSig}{\bm{\Sigma}}\newcommand{\bLam}{\bm{\Lambda}}\newcommand{\bGam}{\bm{\Gamma}}
+\newcommand{\Ac}{\bA_c}
+\newcommand{\Sd}{\bSig_{d|\bom}}
+\newcommand{\Sct}{\tilde{\bSig}_c}
+\newcommand{\lam}{\lambda}
+\newcommand{\dft}{\operatorname{DFT}}
+\newcommand{\idft}{\operatorname{IDFT}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\vecop}{\operatorname{vec}}
+\newcommand{\dbar}{\bar{\bd}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\Fr}[1]{\langle #1\rangle_F}
+\newcommand{\code}[1]{\begingroup\def\_{\char`\_\allowbreak}\ttfamily #1\endgroup}
+\emergencystretch=1.5em
+\newcommand{\Ord}{\mathcal{O}}
+
+\title{\vspace{-1.2em}Why the marginal HMC blur update in \textit{bsbd}\\ loses to Gibbs on ESS/s\\[4pt]
+\large Code review, numerical diagnosis, and an adjoint gradient}
+\author{\normalsize Prepared for Andrew Holbrook\\[2pt]
+\small \texttt{github.com/guillerminasenn/bsbd} (commit \texttt{c42ccb6})\\\footnotesize for Senn, Tjelmeland, Glatt-Holtz, Walker \& Holbrook, \textit{Bayesian Semi-Blind Deconvolution at Scale}, arXiv:2601.09677v1}
+\date{\normalsize 29 September 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\section*{Summary}
+The paper reports that the marginal (collapsed) HMC blur update costs about $25\times$ a Gibbs iteration (13\,s vs.\ 0.47\,s on the $480\times100$ real example) while its ESS for the blur is only about $4\times$ that of Gibbs (133 vs.\ 32 out of 55k draws, Table~1), so Gibbs wins on ESS per second. Three things in the implementation account for this, in decreasing order of impact.
+\begin{enumerate}[leftmargin=1.6em]
+\item \textbf{Bug --- the gradient of the potential is wrong.} In \code{gradient\_potential\_Fourier\_domain} the vector $\bv=\Sd^{-1}(\bd-\bW\bmu_c)$ is silently overwritten by in-place FFTs before it is used, so the sum-of-squares part of the gradient is garbage (150--500\% relative error against finite differences; the prior and log-determinant parts are correct). The sampler remains exact --- Metropolis uses the correct potential --- but the leapfrog integrator no longer conserves energy, so the adapted step size collapses by $\sim\!300\times$, trajectories go almost nowhere, and ESS drops $\sim\!25\times$. A one-line fix (\code{.copy()}).
+\item \textbf{Algorithmic --- the $k$ gradient coordinates are computed one direction at a time (forward mode).} Section~4.2.2 of the paper derives $\partial U/\partial w_i$ per coordinate, and the code vectorises that over the $k$ coordinates with $(k,n_v,n_h)$, $(k,m,m)$ and $(k,n_v,n_v)$ tensors. The true per-leapfrog cost is therefore $\Ord\!\big(k\,(n\log n+m^3+n(n_v+n_h))\big)$ --- a factor $k=126$ above the complexity stated on p.~23 --- plus $\sim\!1$\,GB of temporaries per gradient. Every term is linear in the direction eigenvalue $\eps_i$, so all $k$ coordinates follow from one $n$-sized reduction and one length-$n_v$ FFT (reverse mode). Section~\ref{sec:adjoint} derives this; the implementation (Appendix~B) reproduces the fixed gradient to $10^{-14}$ and cuts one gradient at the paper's problem size from 3.2\,s to 39\,ms.
+\item \textbf{Bug --- the mass matrix is the identity, not $\bSig_\omega^{-1}$.} \code{\_create\_momentum\_object} reads the \code{precondition} option from the wrong dictionary level, so it is always \code{None}; had it been read correctly the code would have crashed because the stored precision matrix is a \code{csr\_matrix}. The preconditioning described in Section~4.2 never ran.
+\end{enumerate}
+With the two bugs fixed and the adjoint gradient, HMC's ESS per second exceeds Gibbs' by $\sim\!3\times$ on a 2160-node test problem (Section~\ref{sec:exp}), and the advantage should grow with problem size because the removed overhead is proportional to $k$. None of this invalidates the paper's posterior results --- only the efficiency comparison.
+
+\section{The gradient is wrong: in-place FFTs on a view of \texttt{p}}
+\code{src/mcmc/update\_blur\_image/collapsedhmc/cyclic/gradient\_potential.py}, line 219, prepares the inputs of the sum-of-squares gradient:
+\begin{lstlisting}[language=Python]
+    ### Compute P_R_ch_starT and R_cv_star_W0t in the time domain, used to compute the gradient of SS
+    if _c.reflectivity_constraints['constr']:
+        P = p.reshape((nv, nh), order='F')          # <-- a VIEW of p (p is (n,1), contiguous)
+        R_ch_star = _c.reflectivity_constraints['Rh_star']
+        P_R_ch_starT = P @ (R_ch_star.T)
+        ...
+    grad_ss = gradient_SS_vectorized(sampler, i, p, P, eigenvalues_D1, ...)
+\end{lstlisting}
+\code{derivatives.py::gradient\_SS\_vectorized} then transforms \code{P} in place (NumPy $\ge 2.0$ accepts \code{out=} in the FFT functions; the repository pins numpy 2.4.1):
+\begin{lstlisting}[language=Python]
+    np.fft.fft(P, axis=1, out=P)                      # Overwrite P with its FFT   <-- also overwrites p
+    np.multiply(P, fft_base_Rch[None, :], out=P)
+    np.fft.ifft(P, axis=1, out=P)
+    np.fft.fft(P, axis=0, out=P)
+    P_after_D1_all = np.fft.ifft(P[None, :, :] * fft_base_D1_j_array[:, :, None], axis=1, out=temp_array_knvnh)
+    d_SS_1_part1_vectorized[unconstrained_indices] = (P_after_D1_all.reshape(k, -1, order='F')) @ p   # p is now corrupted
+    ...
+    d_SS_1_part2_vectorized[unconstrained_indices] = products_reshaped @ p                            # corrupted
+    d_SS_2_vectorized[unconstrained_indices] = (-2 * gamma_matrix_unconstrained_indexes @ p)           # corrupted
+\end{lstlisting}
+The aliasing in isolation:
+\begin{lstlisting}[language=Python]
+>>> p = np.arange(12, dtype=complex).reshape(-1, 1); P = p.reshape((4, 3), order='F')
+>>> np.shares_memory(P, p)
+True
+>>> np.fft.fft(P, axis=1, out=P); p[:4].ravel()
+array([12.+0.j, 15.+0.j, 18.+0.j, 21.+0.j])        # p no longer holds Sigma^-1 dbar
+\end{lstlisting}
+
+\textbf{Evidence.} Central finite differences of the repository's own \code{potential()}, split into its three parts, on two simulated problems (full well column, endpoint-constrained blur, hyper-parameters as in \code{notebooks/run.ipynb}). Entries are $\max|\text{analytic}-\text{FD}|/\max|\text{FD}|$ over the free blur coordinates.
+\begin{center}\footnotesize
+\begin{tabular}{@{}lllll@{}}\toprule
+problem & prior grad. & $\partial\log|\Sd|$ ($\bA$, $\bY$ terms) & $\partial$(sum of sq.) & total\\\midrule
+$n=24$ ($12\times2$, $k=6$, $m=12$), as shipped & $1.5\!\times\!10^{-10}$ & $6.5\!\times\!10^{-9}$ & \textbf{4.97} (wrong signs) & \textbf{5.14}\\
+$n=432$ ($36\times12$, $k=12$, $m=24$), as shipped & $8.9\!\times\!10^{-11}$ & $5.9\!\times\!10^{-8}$ & \textbf{1.51} & \textbf{6.12}\\
+$n=24$, with \code{P = P.copy()} & $1.5\!\times\!10^{-10}$ & $6.5\!\times\!10^{-9}$ & $2.7\!\times\!10^{-9}$ & $6.8\!\times\!10^{-10}$\\
+$n=432$, with \code{P = P.copy()} & $8.9\!\times\!10^{-11}$ & $5.9\!\times\!10^{-8}$ & $1.3\!\times\!10^{-7}$ & $3.3\!\times\!10^{-7}$\\\bottomrule
+\end{tabular}
+\end{center}
+The potential itself was also checked against dense linear algebra (explicit $\Sd=\bW\Sct\bW^{\!\top}+\bSig_d$): log-determinant and quadratic form agree to $10^{-15}$, so the target is right and only the force is wrong.
+
+\textbf{Consequence.} Leapfrog with any position-dependent force field is still volume preserving and reversible, so accept/reject with the exact Hamiltonian keeps the chain exact --- the posteriors in the paper stand. But the proposal is no longer energy conserving: to reach the target acceptance rate the adaptation drives $\eps$ down by two to three orders of magnitude ($0.08\to0.0003$ on the $n=432$ problem; $0.063\to0.0001$ on $n=2160$), and with $L=10$ the trajectory covers almost none of the posterior. The run stored in the repository's \code{estimations/} folder shows the same signature ($\eps$ adapted $0.008\to0.001$, acceptance 0.37, on a problem with only 4 free blur coordinates). This is the dominant reason the HMC ESS in Table~1 is only 133 out of 55k for a 126-dimensional, nearly Gaussian marginal.
+
+\section{Per-coordinate (forward-mode) gradient: a hidden factor of $k$}
+\label{sec:cost}
+Sections 4.2.2.1--4.2.2.2 evaluate the gradient one coordinate at a time: ``each coordinate of $\partial\log|\Sd|/\partial\bw^\star$ is obtained \dots\ Therefore (65) is evaluated in $\Ord(n\log n+m^3)$'' and ``the cost of evaluating (67) is bounded by $\Ord(n(\log n+n_v+n_h))$''. Summed over the $k$ free coordinates this is $\Ord(k(n\log n+m^3+n(n_v+n_h)))$ per leapfrog step, not the $\Ord(k^2+n\log n+m^3+n(n_h+n_v))$ stated on p.~23. The implementation does exactly the per-coordinate computation, ``vectorised'' by stacking the $k$ directions into leading array dimensions:
+\begin{itemize}
+\item three preallocated \code{(k, n\_v, n\_h)} complex temporaries (95\,MB each at the paper's size) through $\sim$15 element-wise passes;
+\item \code{scipy.fft.ifft2(eigenvalues\_dZ, axes=(1,2))}: $k$ two-dimensional FFTs of size $n$;
+\item a Python loop \code{for idx in range(k): subset\_base\_dZ[idx] = subset\_ABA(...)} into a \code{(k, m, m)} tensor;
+\item \code{dY = -(L.T) @ subset\_base\_dZ @ L} and \code{np.trace(inv\_Y @ dY, axis1=1, axis2=2)}: three batched $m\times m$ products per coordinate, i.e.\ $3km^3\approx27$\,GFLOP per gradient at $k=124$, $m=330$ (the last one only to read a trace);
+\item \code{Dh\_star\_array = R\_cv\_star\_W0t[idx, :]}: a \code{(k, n\_v, n\_v)} tensor (229\,MB) plus its transpose, then a batched $(n_v\times n_v)(n_v\times n_h)$ product per coordinate (5.7\,GFLOP).
+\end{itemize}
+Measured breakdown of one gradient at the paper's size ($n_v=480$, $n_h=100$, $k=126$, $m=330$; single-threaded OpenBLAS in a 2-vCPU sandbox):
+\begin{center}\small
+\begin{tabular}{@{}lrr@{}}\toprule
+component & time & share\\\midrule
+\code{gradient\_SS\_vectorized} ($(k,n_v,n_v)$ tensors + batched matmul) & 1251\,ms & 39\%\\
+element-wise ops on $(k,n_v,n_h)$ arrays + $\bL^{\!\top}(\partial\bZ)\bL$ sandwich + \code{inv\_Y @ dY} & 1640\,ms & 52\%\\
+batched \code{ifft2} over $k$ coordinates & 122\,ms & 4\%\\
+\code{subset\_ABA} loop over $k$ coordinates & 76\,ms & 2\%\\
+everything that is $\Ord(n\log n+m^3)$ once (eigenvalues, $\bY^{-1}$, $\bS^{-1}$, $\bv$) & $\sim$70\,ms & 2\%\\\midrule
+total per gradient ($\times11$ per HMC update with $L=10$) & 3171\,ms & \\\bottomrule
+\end{tabular}
+\end{center}
+Section~\ref{sec:adjoint} shows that all of this collapses to $\Ord(n\log n+m^3+n_v^2 n_h)$ per gradient, with no $k$-fold arrays. Verification and timing of the resulting implementation (Appendix~B; harness in Appendix~C):
+\begin{center}\footnotesize
+\begin{tabular}{@{}lcccccc@{}}\toprule
+problem ($n_v\times n_h$, $k$, $m$) & adj.\ vs.\ fixed repo & adj.\ vs.\ FD & repo grad. & adjoint grad. & repo pot. & adjoint pot.\\\midrule
+$12\times2$, 6, 12 ($n=24$) & $3.6\!\times\!10^{-16}$ & $8.1\!\times\!10^{-10}$ & 1.6\,ms & 1.1\,ms & 1.5\,ms & 0.8\,ms\\
+$36\times12$, 12, 24 ($n=432$) & $2.0\!\times\!10^{-14}$ & $2.7\!\times\!10^{-7}$ & 1.6\,ms & 0.9\,ms & 1.3\,ms & 0.6\,ms\\
+$90\times24$, 30, 60 ($n=2160$) & $1.0\!\times\!10^{-14}$ & $5.2\!\times\!10^{-8}$ & 12.1\,ms & 3.1\,ms & 5.2\,ms & 3.0\,ms\\
+$480\times100$, 126, 330 ($n=48000$, paper) & $1.1\!\times\!10^{-14}$ & n/a & 3212\,ms & \textbf{39\,ms} & 339\,ms & 50\,ms\\\bottomrule
+\end{tabular}
+\end{center}
+At the paper's size one HMC blur update (11 gradients + 2 potentials, $L=10$) goes from $\sim$36\,s to $\sim$0.53\,s on this machine ($68\times$). For reference the Gibbs blur update takes 41\,ms and the Gibbs image update 382\,ms here (Section~\ref{sec:secondary} explains the latter).
+
+\section{Derivation of the adjoint gradient}
+\label{sec:adjoint}
+
+\subsection{Setting and conventions}
+All lattice vectors are column-major vectorisations, $\bd=\vecop(\bD)$ with $\bD\in\R^{n_v\times n_h}$, $n=n_vn_h$. A circulant with \emph{base} (first row) $\bc\in\R^{n_v}$ is $[\operatorname{circ}(\bc)]_{pq}=c_{(q-p)\bmod n_v}$, and a BCCB with base $\bm{\Pi}\in\R^{n_v\times n_h}$ has block $(i,j)$ equal to $\operatorname{circ}(\bm{\Pi}[:,(j-i)\bmod n_h])$. For such a matrix $\bm{C}$ write $\lam_{C}:=\dft_2(\text{base})\in\C^{n_v\times n_h}$, exactly the arrays the code calls \code{eigenvalues\_*}. The only facts used below are
+\begin{equation}
+\lam_{MN}=\lam_M\odot\lam_N,\qquad \lam_{M^{\!\top}}=\overline{\lam_M},\qquad \text{base}(\bm{C})=\idft_2(\lam_C),\qquad \lam_{\bm{H}\otimes\bm{C}}(f_v,f_h)=\lam_{H}(f_h)\,\lam_{C}(f_v),
+\label{eq:facts}
+\end{equation}
+where $\idft_2(\lam)(\delta_v,\delta_h)=\tfrac1n\sum_{f}\lam(f)\,e^{2\pi i(f_v\delta_v/n_v+f_h\delta_h/n_h)}$. (Whether one calls $\lam$ or $\overline{\lam}$ ``the'' eigenvalues is immaterial: every formula is used consistently in the code's convention, and the end result was checked against finite differences.)
+
+The blur enters through $\bW_0=\operatorname{circ}(\bP\bw^\star)$ and $\bW=\bI_{n_h}\otimes\bW_0$. For the $i$-th free coordinate, $\bP\be_i=\be_{r_i}$ (a unit vector at position $r_i$; \code{row\_indexes} in the code), so
+\begin{equation}
+\bE_i:=\frac{\partial\bW_0}{\partial w_i}=\operatorname{circ}(\be_{r_i}),\qquad
+\mathcal{E}_i:=\frac{\partial\bW}{\partial w_i}=\bI_{n_h}\otimes\bE_i,\qquad
+\lam_{\mathcal{E}_i}(f_v,f_h)=\eps_i(f_v):=e^{-2\pi i f_v r_i/n_v}.
+\label{eq:eps}
+\end{equation}
+$\bE_i$ is a cyclic shift: $[\bE_i\bX]_{p,:}=\bX_{(p+r_i)\bmod n_v,:}$, and for a circulant $\operatorname{circ}(\bb)$ the product $\bE_i\operatorname{circ}(\bb)=\operatorname{circ}(\text{roll}(\bb,r_i))$ has base $b_{(\cdot-r_i)}$. Everything that follows is a consequence of one observation: \emph{every per-coordinate quantity in Section~4.2.2 of the paper is a linear (or conjugate-linear) functional of $\eps_i$, and $\eps_i$ depends on $i$ only through the shift $r_i$.}
+
+\begin{center}\fbox{\parbox{0.94\textwidth}{\textbf{Shift-evaluation lemma.} For any $\bG\in\C^{n_v\times n_h}$, with $g(f_v):=\sum_{f_h}\bG(f_v,f_h)$,
+\begin{align}
+\sum_{f_v,f_h}\bG(f_v,f_h)\,\eps_i(f_v)&=\sum_{f_v}g(f_v)\,e^{-2\pi i f_vr_i/n_v}=\big[\dft_{n_v}(g)\big](r_i),\label{eq:lemma}\\
+\sum_f\Big(\bG\eps_i+\overline{\bG\eps_i}\Big)&=2\,\mathrm{Re}\big[\dft_{n_v}(g)\big](r_i).\notag
+\end{align}
+Hence the functional can be evaluated for \emph{all} $k$ free coordinates at once with one $\Ord(n)$ reduction, one length-$n_v$ FFT and a gather at the $k$ shifts $\{r_i\}$, instead of $k$ separate $\Ord(n)$ contractions with $k$ different $\bG\odot\eps_i$ arrays.}}
+\end{center}
+
+\subsection{The potential and what is shared with it}
+With the paper's notation (eqs.\ 46--60), $\bA=\bW\bSig_c\bW^{\!\top}+\bSig_d$ (BCCB), $\bB=\bA^{-1}\bW\bSig_c$ (BCCB), $\Sct=\bSig_c-\bSig_c\Ac^{\!\top}(\Ac\bSig_c\Ac^{\!\top})^{-1}\Ac\bSig_c$, $\Sd=\bW\Sct\bW^{\!\top}+\bSig_d$, and
+\begin{align}
+\log|\Sd|&=\log|\bY|+\sum_f\log\lam_A(f),\qquad
+\bY=\bI_m-\bL^{\!\top}\Ac\tilde{\bZ}\Ac^{\!\top}\bL,\qquad
+\tilde{\bZ}:=\sigma_c^{2}\,\bR_c\bW^{\!\top}\bA^{-1}\bW\bR_c,\label{eq:logdet}\\
+\Sd^{-1}&=\bA^{-1}+\bB\Ac^{\!\top}\bS^{-1}\Ac\bB^{\!\top},\qquad \bS=\Ac(\bSig_c-\bZ)\Ac^{\!\top}.\label{eq:woodbury}
+\end{align}
+Here $\bL\bL^{\!\top}=(\Ac\bR_c\Ac^{\!\top})^{-1}$ as in the code (correlation rather than covariance, whence the scaling $\tilde\bZ=\bZ/\sigma_c^2$ in \eqref{eq:logdet}), and $\lam_A=\sigma_c^2|\lam_W|^2\lam_{R_c}+\sigma_d^2\lam_{R_d}$ is real and positive. Because the $m$ exactly observed pixels lie in one column of the lattice, $\Ac\bm{C}\Ac^{\!\top}$ for any BCCB $\bm{C}$ is a submatrix of its \emph{diagonal block}: $[\Ac\bm{C}\Ac^{\!\top}]_{ab}=c\big((\rho_b-\rho_a)\bmod n_v,\,0\big)$ where $\rho_a$ are the well rows and $c(\cdot,0)$ the first column of the base array. With $\dbar=\bd-\bW\bmu_c$,
+\begin{equation}
+\bv:=\Sd^{-1}\dbar=\bA^{-1}\dbar+\bB\Ac^{\!\top}\bS^{-1}\bq,\qquad \bq:=\Ac\bB^{\!\top}\dbar,
+\label{eq:v}
+\end{equation}
+which costs a handful of FFTs (each BCCB mat-vec is $\idft_2(\lam\odot\dft_2(\cdot))$), a gather/scatter on the well rows, and one $m\times m$ Cholesky solve. $U=-\log p(\bom)+\tfrac12\log|\Sd|+\tfrac12\dbar^{\!\top}\bv$ is thus $\Ord(n\log n+m^3)$, and $\bY$, $\bS$, $\bv$, $\bq$ are reused by the gradient below (the shipped code recomputes them in \code{potential()} and builds a dense $m\times n$ matrix for $\bq$).
+
+\subsection{Gradient of the log-determinant}
+By Jacobi's formula, $\partial\log|\Sd|/\partial w_i=\tr(\bA^{-1}\partial_i\bA)+\tr(\bY^{-1}\partial_i\bY)$ (paper's eq.~65). The adjoint variables are $\bA^{-1}$ and $\bY^{-1}$; the point is to contract them with $\partial_i\bA$, $\partial_i\bY$ \emph{without forming} $\partial_i\bA$, $\partial_i\bY$ for each $i$.
+
+\paragraph{Term $\tr(\bA^{-1}\partial_i\bA)$.} From $\partial_i\bA=\sigma_c^2(\mathcal{E}_i\bR_c\bW^{\!\top}+\bW\bR_c\mathcal{E}_i^{\!\top})$ and \eqref{eq:facts}--\eqref{eq:eps},
+\begin{equation}
+\lam_{\partial_i A}=\sigma_c^2\big(\eps_i\bG_1+\overline{\eps_i\bG_1}\big),\qquad \bG_1:=\lam_{R_c}\odot\overline{\lam_W},
+\end{equation}
+so, since the trace of a BCCB is the sum of its eigenvalues and $\lam_A$ is real, the lemma gives
+\begin{equation}
+\boxed{\;\tr(\bA^{-1}\partial_i\bA)=2\sigma_c^2\,\mathrm{Re}\big[\dft_{n_v}(h_1)\big](r_i),\qquad h_1(f_v)=\sum_{f_h}\lam_A^{-1}(f)\,\bG_1(f)\;}
+\label{eq:trA}
+\end{equation}
+for all $i$ at once: one $\Ord(n)$ reduction and one FFT of length $n_v$.
+
+\paragraph{Term $\tr(\bY^{-1}\partial_i\bY)$.} This is where the shipped code spends $3km^3$ flops and $k$ IFFT2s. From \eqref{eq:logdet}, $\partial_i\bY=-\bL^{\!\top}\Ac(\partial_i\tilde\bZ)\Ac^{\!\top}\bL$, and by cyclicity of the trace
+\begin{equation}
+\tr(\bY^{-1}\partial_i\bY)=-\tr\big(\bM\,\Ac(\partial_i\tilde\bZ)\Ac^{\!\top}\big)=-\Fr{\bM,\;\Ac(\partial_i\tilde\bZ)\Ac^{\!\top}},\qquad \bM:=\bL\bY^{-1}\bL^{\!\top}\ (m\times m,\ \text{symmetric}),
+\label{eq:trY1}
+\end{equation}
+where $\Fr{\cdot,\cdot}$ is the Frobenius inner product and we used that $\partial_i\tilde\bZ$ is symmetric. $\bM$ is formed \emph{once}, $\Ord(m^3)$. Now use the diagonal-block structure: $[\Ac(\partial_i\tilde\bZ)\Ac^{\!\top}]_{ab}=\tilde z_i\big((\rho_b-\rho_a)\bmod n_v\big)$ with $\tilde z_i(\delta):=\text{base}(\partial_i\tilde\bZ)(\delta,0)$. Grouping the $m^2$ entries of $\bM$ by lag,
+\begin{equation}
+\Fr{\bM,\Ac(\partial_i\tilde\bZ)\Ac^{\!\top}}=\sum_{\delta=0}^{n_v-1}\mu(\delta)\,\tilde z_i(\delta),\qquad
+\mu(\delta):=\sum_{a,b:\,(\rho_b-\rho_a)\bmod n_v=\delta}M_{ab},
+\label{eq:lag}
+\end{equation}
+an $\Ord(m^2)$ histogram (\code{np.add.at} in the code) that is even, $\mu(\delta)=\mu(-\delta)$, because $\bM$ is symmetric. Inserting $\tilde z_i(\delta)=\mathrm{Re}\,\tfrac1n\sum_f\lam_{\partial_i\tilde Z}(f)e^{2\pi i f_v\delta/n_v}$ from \eqref{eq:facts} and exchanging the sums,
+\begin{equation}
+\sum_\delta\mu(\delta)\tilde z_i(\delta)=\mathrm{Re}\,\frac1n\sum_f\lam_{\partial_i\tilde Z}(f)\,\hat\mu(f_v),\qquad
+\hat\mu(f_v):=\sum_\delta\mu(\delta)e^{2\pi i f_v\delta/n_v}=\big[\dft_{n_v}(\mu)\big](f_v)\in\R,
+\label{eq:muhat}
+\end{equation}
+where $\hat\mu$ is real (and the sign of the exponent irrelevant) because $\mu$ is even. It remains to write $\lam_{\partial_i\tilde Z}$ in the form of the lemma. With $\tilde\bZ=\sigma_c^2\bR_c(\bW^{\!\top}\bA^{-1}\bW)\bR_c$, the product rule (paper's S.31--S.34) gives in the Fourier domain
+\begin{align}
+\lam_{\partial_i(W^{\!\top}A^{-1}W)}&=\underbrace{\overline{\eps_i}\,\lam_A^{-1}\lam_W}_{\mathcal{E}_i^{\!\top}A^{-1}W}
++\underbrace{\eps_i\,\lam_A^{-1}\overline{\lam_W}}_{W^{\!\top}A^{-1}\mathcal{E}_i}
+-\underbrace{|\lam_W|^2\lam_A^{-2}\,\lam_{\partial_iA}}_{W^{\!\top}A^{-1}(\partial_iA)A^{-1}W}
+=\eps_i\big(\overline{\bG_2}+\bG_3\big)+\overline{\eps_i\big(\overline{\bG_2}+\bG_3\big)},\\
+\bG_2&:=\lam_A^{-1}\lam_W,\qquad \bG_3:=-\sigma_c^2|\lam_W|^2\lam_A^{-2}\bG_1,\notag
+\end{align}
+so that, with $\bQ:=\sigma_c^2\lam_{R_c}^2(\overline{\bG_2}+\bG_3)$ (all $\Ord(n)$, independent of $i$),
+\begin{equation}
+\lam_{\partial_i\tilde Z}=\eps_i\bQ+\overline{\eps_i\bQ}.
+\label{eq:lamZ}
+\end{equation}
+Substituting \eqref{eq:lamZ} into \eqref{eq:muhat} and applying the lemma to $\bG=\hat\mu\odot\bQ$ (with $\hat\mu$ broadcast along $f_h$; real, so it can be pulled through the conjugate):
+\begin{equation}
+\boxed{\;\tr(\bY^{-1}\partial_i\bY)=-\frac{2}{n}\,\mathrm{Re}\big[\dft_{n_v}(\hat\mu\odot q)\big](r_i),\qquad q(f_v)=\sum_{f_h}\bQ(f_v,f_h).\;}
+\label{eq:trY}
+\end{equation}
+Cost for all $k$ coordinates: $\Ord(m^3)$ for $\bM$ (two $m\times m$ products after one $m\times m$ inverse), $\Ord(m^2)$ for $\mu$, $\Ord(n)$ for $\bQ$ and $q$, and two FFTs of length $n_v$. Compare the shipped code, which for each $i$ forms $\lam_{\partial_i\tilde Z}$ on the full lattice, inverse-transforms it, extracts the $m\times m$ block, sandwiches it with $\bL$ and multiplies by $\bY^{-1}$: $\Ord(k(n\log n+m^3))$.
+
+\subsection{Gradient of the sum of squares}
+Let $\mathrm{SS}(\bom)=\dbar^{\!\top}\Sd^{-1}\dbar$ with both $\dbar$ and $\Sd$ depending on $\bom$. With $\bv=\Sd^{-1}\dbar$ from \eqref{eq:v} and $\partial_i\Sd^{-1}=-\Sd^{-1}(\partial_i\Sd)\Sd^{-1}$ (paper's eqs.\ 67--68),
+\begin{equation}
+\frac{\partial\,\mathrm{SS}}{\partial w_i}=-\bv^{\!\top}(\partial_i\Sd)\bv\;-\;2\,\bv^{\!\top}\mathcal{E}_i\bmu_c .
+\label{eq:dSS}
+\end{equation}
+
+\paragraph{Second term.} $\mathcal{E}_i\bmu_c$ is linear in $\be_i$: writing $\bW\bmu_c=\bGam\bw^\star$ (paper's eq.~10, $\bGam$ the image-convolution matrix built from $\bmu_c$), $\mathcal{E}_i\bmu_c=\bGam\be_i$, hence $-2\bv^{\!\top}\mathcal{E}_i\bmu_c=-2[\bGam^{\!\top}\bv]_i$. One product $\bGam^{\!\top}\bv$ --- $n_h$ circulant blocks applied by FFT, $\Ord(n\log n_v)$, or the precomputed dense $k\times n$ slice that the code keeps --- gives all $k$ entries. (The code already does this; it only had the wrong $\bv$.)
+
+\paragraph{First term.} With $\Sct=\sigma_c^2(\bR_{c,h}\otimes\bR_{c,v}-\bR^\star_{c,h}\otimes\bR^\star_{c,v})$ (paper's S.25), $\bW=\bI\otimes\bW_0$ and $\mathcal{E}_i=\bI\otimes\bE_i$, the mixed-product property gives
+\begin{equation}
+\partial_i\Sd=\mathcal{E}_i\Sct\bW^{\!\top}+\bW\Sct\mathcal{E}_i^{\!\top}
+=\sigma_c^2\Big[\bR_{c,h}\otimes(\bD_i+\bD_i^{\!\top})-\bR^\star_{c,h}\otimes(\bD^\star_i+\bD^{\star\top}_i)\Big],
+\end{equation}
+with $\bD_i:=\bE_i\bR_{c,v}\bW_0^{\!\top}$ and $\bD_i^\star:=\bE_i\bR^\star_{c,v}\bW_0^{\!\top}$, which is the paper's eq.~(71). For any $\bm{H}\in\R^{n_h\times n_h}$, $\bD\in\R^{n_v\times n_v}$ and $\bV=\vecop^{-1}(\bv)$, the Kronecker mat-vec identity $(\bm{H}\otimes\bD)\vecop(\bV)=\vecop(\bD\bV\bm{H}^{\!\top})$ gives
+\begin{equation}
+\bv^{\!\top}(\bm{H}\otimes\bD)\bv=\tr\big(\bV^{\!\top}\bD\bV\bm{H}^{\!\top}\big)=\Fr{\bD^{\!\top},\,\bV\bm{H}^{\!\top}\bV^{\!\top}}=\Fr{\bD^{\!\top},\,\bV\bm{H}\bV^{\!\top}}\ \text{for symmetric }\bm{H}.
+\label{eq:kron}
+\end{equation}
+This is the adjoint step: instead of applying $\bm{H}\otimes\bD_i$ to $\bv$ for every $i$ (the code's $k$ FFT-convolutions and its $(k,n_v,n_v)$ tensor), form the \emph{single} $n_v\times n_v$ matrix $\bK:=\bV\bR_{c,h}\bV^{\!\top}$ (and $\bK^\star:=\bV\bR^\star_{c,h}\bV^{\!\top}$), cost $\Ord(n_v n_h^2+n_v^2n_h)$, and read off the $k$ inner products. Both $\bK$ and $\bK^\star$ are symmetric, so $\Fr{\bD_i+\bD_i^{\!\top},\bK}=2\Fr{\bD_i,\bK}$.
+
+\emph{Unconstrained part.} $\bR_{c,v}\bW_0^{\!\top}$ is circulant with base $\bb=\idft_{n_v}(\lam_{R_{c,v}}\odot\overline{\lam_{W_0}})$, so $\bD_i=\bE_i\operatorname{circ}(\bb)$ has base $b_{(\cdot-r_i)}$ and
+\begin{equation}
+\Fr{\bD_i,\bK}=\sum_{p,q}b\big((q-p-r_i)\bmod n_v\big)K_{pq}=\sum_{\delta}b(\delta-r_i)\,\kappa(\delta)=\sum_u b(u)\,\kappa(u+r_i)=(\kappa\star\bb)(r_i),
+\end{equation}
+where $\kappa(\delta):=\sum_pK_{p,(p+\delta)\bmod n_v}$ are the cyclic diagonal sums of $\bK$;
+this is a cyclic cross-correlation ($\Ord(n_v^2)$ for $\kappa$) with $\bb$: $(\kappa\star\bb)=\idft_{n_v}\big(\dft(\kappa)\odot\overline{\dft(\bb)}\big)$, one FFT for all $k$ shifts.
+
+\emph{Constrained (well) part.} $\bX:=\bR^\star_{c,v}\bW_0^{\!\top}$ is a general $n_v\times n_v$ matrix ($\bR^\star_{c,v}$ is not circulant), and $\bD^\star_i=\bE_i\bX$ is $\bX$ with its rows cyclically shifted by $r_i$, so
+\begin{equation}
+\Fr{\bD^\star_i,\bK^\star}=\sum_{p,q}X_{(p+r_i)\bmod n_v,\,q}\,K^\star_{pq}=\sum_q\big(\bK^\star_{:,q}\star\bX_{:,q}\big)(r_i)
+=\idft_{n_v}\Big(\sum_q\dft(\bX_{:,q})\odot\overline{\dft(\bK^\star_{:,q})}\Big)(r_i),
+\end{equation}
+i.e.\ column-wise FFTs of two $n_v\times n_v$ matrices, $\Ord(n_v^2\log n_v)$, again for all $k$ at once. Collecting,
+\begin{equation}
+\boxed{\;-\bv^{\!\top}(\partial_i\Sd)\bv=-2\sigma_c^2\Big[(\kappa\star\bb)(r_i)-\sum_q\big(\bK^\star_{:,q}\star\bX_{:,q}\big)(r_i)\Big].\;}
+\label{eq:dSS1}
+\end{equation}
+
+\subsection{Assembling the gradient and its cost}
+For the free coordinates, with $\bR_\omega$ the constrained blur prior correlation (paper's eq.~16),
+\begin{equation}
+\frac{\partial U}{\partial w_i}=\frac{[\bR_\omega^{-1}(\bom-\bmu_\omega)]_i}{\sigma_w^2}
++\frac12\Big[\underbrace{\tr(\bA^{-1}\partial_i\bA)}_{\eqref{eq:trA}}+\underbrace{\tr(\bY^{-1}\partial_i\bY)}_{\eqref{eq:trY}}\Big]
++\frac12\Big[\underbrace{-\bv^{\!\top}(\partial_i\Sd)\bv}_{\eqref{eq:dSS1}}-2[\bGam^{\!\top}\bv]_i\Big].
+\end{equation}
+Every bracket is now a fixed vector indexed by $r_i$, produced by the following work, none of which scales with $k$:
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}\toprule
+quantity & operations & cost\\\midrule
+$\lam_A,\lam_A^{-1},\lam_B,\bG_1,\bG_2,\bG_3,\bQ$ & element-wise on $n_v\times n_h$ arrays & $\Ord(n)$\\
+$\dbar$, $\bA^{-1}\dbar$, $\bB^{\!\top}\dbar$, $\bB\Ac^{\!\top}(\cdot)$ & 4 BCCB mat-vecs (FFT2 pairs) & $\Ord(n\log n)$\\
+$\bY$, $\bS$, $\bS^{-1}\bq$, $\bY^{-1}$, $\bM=\bL\bY^{-1}\bL^{\!\top}$ & dense $m\times m$ & $\Ord(m^3)$\\
+$\mu$ (lag histogram of $\bM$), $\hat\mu$ & scatter-add, FFT & $\Ord(m^2+n_v\log n_v)$\\
+$h_1$, $q$ and their FFTs & row sums, 2 FFTs & $\Ord(n+n_v\log n_v)$\\
+$\bK=\bV\bR_{c,h}\bV^{\!\top}$, $\bK^\star$, $\kappa$ & dense & $\Ord(n_vn_h^2+n_v^2n_h)$\\
+$\bX=\bR^\star_{c,v}\bW_0^{\!\top}$, column FFTs of $\bX,\bK^\star$ & dense, FFT & $\Ord(n_v^3+n_v^2\log n_v)$\\
+$\bGam^{\!\top}\bv$ & block-circulant mat-vec (or $k\times n$ dense) & $\Ord(n\log n_v)$ (or $\Ord(kn)$)\\\bottomrule
+\end{tabular}
+\end{center}
+Total $\Ord(n\log n+m^3+n_v^2n_h+n_v^3)$ per gradient, versus $\Ord(k(n\log n+m^3+n_v^2n_h))$ for the per-coordinate scheme; at the paper's size ($k=126$) the measured ratio is $82\times$ (Section~\ref{sec:cost}). Memory drops from $\sim$1\,GB of $k$-indexed temporaries to a few $n_v\times n_v$ and $n_v\times n_h$ arrays. In automatic-differentiation terms: the shipped code is forward mode ($k$ Jacobian-vector products, one per basis direction $\be_i$), while \eqref{eq:trA}, \eqref{eq:trY}, \eqref{eq:dSS1} are a single reverse-mode sweep in which $\bA^{-1}$, $\bM$, $\bK$, $\bK^\star$ play the role of the adjoint (cotangent) variables and the final FFT-at-$r_i$ is the transpose of the linear map $\bw^\star\mapsto\bW_0$.
+
+\section{The momentum is not preconditioned (bug)}
+\code{collapsedhmc/initialize.py::\_create\_momentum\_object}:
+\begin{lstlisting}[language=Python]
+    precondition = sampler.mcmc_config.get('precondition', None)      # key lives in mcmc_config['collapsed_hmc'] -> always None
+    if precondition == 'prior':
+        sigma2p = 1 / sampler.theta['sigma2w'][:, 0]
+        mass_correlation_matrix = _w.wavelet_constraints['inv_R_wu_star']   # a scipy.sparse csr_matrix
+    else:
+        sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
+        mass_correlation_matrix = np.eye(dim_p)
+    ...
+    M = Covariance(lattice=lattice_p, sigma2=sigma2p, R=mass_correlation_matrix)   # calls linalg.inv(R): fails on csr
+\end{lstlisting}
+\code{\_initialize\_collapsed\_hmc} stores the option under \code{mcmc\_config['collapsed\_hmc']['precondition']}, and \code{kinetic}/\code{grad\_kinetic} read it from there, so the sampler is internally consistent (valid HMC) but with $\bM=\sigma_w^{-2}\bI$: only the scalar part of $\bSig_\omega^{-1}$, not the correlation structure $\bR_\omega^{-1}$. Fixing the key alone raises \code{ValueError: Sparse arrays/matrices are not supported} inside \code{Covariance}, so the intended path was never exercised. Its impact in my experiments was modest (ESS $128\to150$ on $n=432$) --- the gradient bug dominates --- but the paper's description of the algorithm does not match what ran. A more useful choice for this likelihood-dominated posterior (SNR $\approx116$\,dB) would be an estimate of the posterior precision of $\bom$ ($k\times k$, cheap from a pilot run), which also lets a fixed $L=10$ traverse the posterior.
+
+\section{End-to-end ESS/s: what the fixes buy}
+\label{sec:exp}
+Same simulated set-up as the notebook (full well column, endpoint-constrained blur, hyper-parameters $\alpha_w=2.01$, $\beta_w=10$, $\alpha_c=2.00001$, $\beta_c=1/500$, $\alpha_\zeta=3$, $\beta_\zeta=0.1$, $\rho=1.5$), chains initialised at the truth, $L=10$, $\eps$ adapted multiplicatively in batches of 25 to a 70\% acceptance target, first 20\% of the chain discarded. ESS uses the repository's \code{estimate\_effective\_sample\_size} (Geyer initial monotone sequence) on the free blur coordinates. Chains with identical seeds are identical across the ``fixed'' and ``adjoint'' rows, a second check that the adjoint gradient is the same function.
+
+\textbf{$36\times12$ lattice, $k=12$, $m=24$ ($n=432$); Gibbs 3000 iterations, HMC 1500}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lrrrrrr@{}}\toprule
+variant & ms/iter & accept. & ESS($\bom$) min & ESS($\bom$) med. & ESS/s (med.) & final $\eps$\\\midrule
+Gibbs & 11.3 & -- & 48.4 / 2400 & 72.3 / 2400 & 2.67 & --\\
+HMC as shipped (wrong gradient, identity mass) & 31.0 & 0.71 & 3.4 / 1200 & 5.1 / 1200 & 0.14 & 0.0003\\
+HMC, gradient fixed (identity mass) & 29.4 & 0.71 & 55.3 / 1200 & 127.9 / 1200 & 3.62 & 0.082\\
+HMC, gradient fixed + prior mass matrix & 30.9 & 0.72 & 71.3 / 1200 & 149.9 / 1200 & 4.04 & 0.114\\
+same, adjoint gradient + potential & 20.1 & 0.72 & 71.3 / 1200 & 149.9 / 1200 & \textbf{6.23} & 0.114\\\bottomrule
+\end{tabular}
+\end{center}
+\textbf{$90\times24$ lattice, $k=30$, $m=60$ ($n=2160$); Gibbs 2000 iterations, HMC 800}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lrrrrrr@{}}\toprule
+variant & ms/iter & accept. & ESS($\bom$) min & ESS($\bom$) med. & ESS/s (med.) & final $\eps$\\\midrule
+Gibbs & 19.8 & -- & 7.5 / 1600 & 22.6 / 1600 & 0.71 & --\\
+HMC as shipped (wrong gradient, identity mass) & 144.2 & 0.69 & 3.3 / 640 & 5.1 / 640 & 0.056 & 0.0001\\
+HMC, gradient fixed + prior mass matrix & 117.1 & 0.76 & 27.7 / 640 & 59.3 / 640 & 0.79 & 0.063\\
+same, adjoint gradient + potential & 39.1 & 0.76 & 27.7 / 640 & 59.3 / 640 & \textbf{2.37} & 0.063\\\bottomrule
+\end{tabular}
+\end{center}
+With the shipped code HMC is 13--20$\times$ \emph{worse} than Gibbs per second, reproducing the paper's qualitative finding. Fixing the gradient alone makes each HMC draw worth 4--7 Gibbs draws; the adjoint gradient then makes the HMC iteration cheap enough that HMC wins per second by $\sim3\times$ at $n=2160$. The remaining per-iteration overhead of the adjoint version is independent of $k$, so the gap should widen at the real example ($k=126$, where the vectorised gradient is $82\times$ slower than the adjoint one). Absolute times are from a 2-vCPU sandbox with single-threaded BLAS; compare ratios, not seconds, with the paper's 13\,s / 0.47\,s.
+
+\section{Secondary inefficiencies (both samplers)}
+\label{sec:secondary}
+\begin{itemize}
+\item \textbf{\code{subset\_AB} builds a dense $m\times n$ matrix} (100 circulant $480\times480$ blocks + \code{hstack}, $\sim$370\,MB of allocation) each time it is called, just to apply $\Ac\bB^{\!\top}$ or $\bR\Ac^{\!\top}$ to a vector. In \code{potential()} this is $\Ac\bB^{\!\top}\dbar=(\bB^{\!\top}\dbar)[\text{well rows}]$: one FFT mat-vec and a gather. The same call sits in the \textbf{Gibbs image update} (\code{RAt = subset\_AB(base\_R\_cond, \_image).T}) and is why that update costs 382\,ms of the $\sim$0.45\,s Gibbs iteration; $\bR_{c|d}\Ac^{\!\top}\bm{x}$ is a scatter followed by an FFT mat-vec. Gibbs itself could be 5--10$\times$ faster.
+\item \textbf{\code{\_correct\_sample} computes the Kriging correction twice} (once with \code{inv\_ARAt}, once with a Cholesky solve) and keeps the first; the second exists only for a verbose diagnostic but always runs, including an $n\times m$ mat-vec and an $m\times m$ Cholesky.
+\item \textbf{\code{potential()} recomputes $\bA,\bZ,\bY,\bS,\bv$} that the gradient at the same point has just computed; two potentials per iteration cost as much as two more gradients in the adjoint version. \code{potential\_adjoint}/\code{gradient\_potential\_adjoint} share a \code{common} dictionary for this.
+\item \textbf{\code{kinetic}/\code{grad\_kinetic} re-factorise the mass matrix} (Cholesky of a $k\times k$ matrix) at every leapfrog step.
+\item \textbf{Traces via full products.} \code{np.trace(inv\_Y @ dY, axis1=1, axis2=2)} forms $k$ full $m\times m$ products to read $k$ traces (\code{einsum('ab,kba->k')} is $m^2$ per coordinate) --- moot with the adjoint version.
+\item \textbf{\code{create\_W} mutates its input} (\code{w\_star[np.abs(w\_star) < 1e-11] = 0}), including the leapfrog position and the column of \code{sampler.theta['w\_star']} it was sliced from. Numerically negligible, but it breaks exact reversibility and is easy to remove.
+\item \textbf{Memory at set-up.} \code{Covariance} allocates \code{np.eye(n)} (17\,GB at $n=48000$) to obtain one unit vector; each \code{Wavelet} object stores $\sim$1.1\,GB of derivative tensors (\code{bases\_d\_W}, \code{bases\_d\_WT}, \code{fft2\_bases\_d\_W}, \code{fft2\_bases\_d\_WT}) of which only \code{fft2\_bases\_d\_WT} and \code{bases\_d\_W0} are read at iteration time, and the model is deep-copied several times; \code{\_initialize\_collapsed\_hmc} builds another $\sim$1.4\,GB (\code{dW0\_Rcv\_star}, \code{bases\_dW\_Rc}, \code{gamma}) that the gradient never reads. The real example needs well over 8\,GB before the first iteration for no algorithmic reason.
+\item \textbf{Paper text.} The per-leapfrog complexity on p.~23 should read $\Ord(k(n\log n+m^3+n(n_v+n_h)))$ for the algorithm as derived and implemented, or Section 4.2.2 should be replaced by the adjoint form of Section~\ref{sec:adjoint}, which does achieve the stated bound. Section 4.2 should also state the mass matrix that was actually used ($\bM=\sigma_w^{-2}\bI$).
+\end{itemize}
+
+\section{Recommended order of changes}
+\begin{enumerate}
+\item Apply the three-line patch in Appendix~A (\code{P.copy()}, the \code{precondition} key + \code{.toarray()}, and \code{np.eye(1, n)}). Re-run \code{check\_gradient.py} (Appendix~C); the FD error should be $\sim10^{-7}$.
+\item Swap \code{gradient\_potential\_Fourier\_domain}/\code{potential} for the adjoint versions in \code{cyclic/utils.py} (\code{leapfrog\_collapsed\_c} and \code{log\_ar\_hmc\_collapsed\_c}); pass the \code{common} dictionary from the first/last gradient into the two potential evaluations.
+\item Replace \code{subset\_AB} in \code{potential()} and in the Gibbs image update by an FFT mat-vec plus gather/scatter, and drop the duplicated correction in \code{\_correct\_sample}.
+\item Re-tune HMC: with a correct force, $\eps$ will be 100--300$\times$ larger than before at the same acceptance rate; consider a $k\times k$ mass matrix from a pilot run's posterior covariance and re-examine $L$. Then redo the Table~1 / Figure~5 comparison --- the ESS/s conclusion is likely to reverse.
+\end{enumerate}
+
+\clearpage
+\appendix
+\section{Minimal patch (three files)}
+Apply from the repository root with \code{git apply bsbd\_minimal\_fixes.patch}.
+\lstinputlisting[style=app]{bsbd_minimal_fixes.patch}
+
+\clearpage
+\section{\texttt{gradient\_adjoint.py}}
+Drop-in module (path \code{src/mcmc/update\_blur\_image/collapsedhmc/cyclic/gradient\_adjoint.py}) implementing Section~\ref{sec:adjoint}. \code{gradient\_potential\_adjoint(sampler, i, w\_star)} and \code{potential\_adjoint(sampler, i, w\_star)} have the same signatures and return values as the existing \code{gradient\_potential\_Fourier\_domain} and \code{potential}; both accept an optional \code{common=} argument to share intermediates (\code{gradient\_potential\_adjoint(..., return\_common=True)} returns it). Variable names follow the derivation: \code{G1, G2, G3, Q, h1, qv} $=\bG_1,\bG_2,\bG_3,\bQ,h_1,q$; \code{M, Mlag, hM} $=\bM,\mu,\hat\mu$; \code{K, Kdiag, b} $=\bK,\kappa,\bb$; \code{X, Ks} $=\bX,\bK^\star$; \code{r\_idx} $=\{r_i\}$.
+\lstinputlisting[style=app,language=Python]{gradient_adjoint.py}
+
+\clearpage
+\section{\texttt{check\_gradient.py} (verification and timing harness)}
+Run from the repository root, e.g.\ \code{python check\_gradient.py 24 6 12 12 6} ($n=432$, a few seconds) or \code{python check\_gradient.py 330 50 126 150 50 2} (paper size; needs several GB of RAM because of the set-up allocations noted in Section~\ref{sec:secondary}). Arguments: observed rows, observed columns, blur length $k$, vertical margin, horizontal margin, [timing repetitions]. It builds the notebook's simulated model, compares the repo gradient, the adjoint gradient and central finite differences of \code{potential()}, and times each. Note the shim for \code{scipy.linalg.kron}, which no longer exists in the SciPy version the repository pins.
+\lstinputlisting[style=app,language=Python]{check_gradient.py}
+
+\clearpage
+\section{Environment and method notes}
+\begin{itemize}
+\item Repository: \code{github.com/guillerminasenn/bsbd}, single commit \code{c42ccb6} (``initial commit''), cloned 28 Sep 2026. Python 3.11, numpy 2.4.4, scipy 1.17.1 (the repository pins numpy 2.4.1 / scipy 1.16.0; both have the \code{out=} FFT argument that enables the aliasing bug).
+\item Hardware: 2-vCPU cloud sandbox, 8\,GB RAM. BLAS pinned to one thread (\code{OPENBLAS\_NUM\_THREADS=1}) because the default threading produced erratic 30--100\,ms stalls on $60\times60$ operations in this container. Ratios between variants are robust to this; absolute times are not comparable with the paper's HPC runs.
+\item All simulated problems use the notebook's \code{build\_model} path (full well column as exact image observations, endpoint-constrained blur, cyclic topology) with the notebook's hyper-parameters and seed 20. The paper-size problem uses the paper's geometry ($330\times50$ observed, margins 150/50, $k=126$, $m=330$).
+\item For the paper-size timing only, unused set-up tensors were skipped to fit in 8\,GB (\code{dW0\_Rcv\_star}, \code{bases\_dW\_Rc}, \code{fft2\_bases\_d\_W}, \code{bases\_d\_W(T)}, \code{d\_W0}); none of them is read by the gradient, potential or Gibbs updates.
+\item Two minor repository issues hit while running: \code{MCMC.run} raises when \code{adapt\_config} is \code{None} (it dereferences the argument after defaulting the attribute), and the gradient raises \code{KeyError: 'L'} when there are no exact image observations ($m=0$), although the potential handles that case.
+\item The derivation in Section~\ref{sec:adjoint} was validated end-to-end: the implementation built from it agrees with the (fixed) per-coordinate gradient to $10^{-14}$ relative and with finite differences to $10^{-7}$ on all test problems, and chains driven by the two gradients from the same seed are bit-for-bit identical in their accept/reject decisions.
+\end{itemize}
+\end{document}

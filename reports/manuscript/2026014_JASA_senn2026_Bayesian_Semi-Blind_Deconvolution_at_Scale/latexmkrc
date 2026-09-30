@@ -1,0 +1,9 @@
+add_cus_dep('tex', 'aux', 0, 'makeexternaldocument');
+
+sub makeexternaldocument {
+    my ($base_name, $path) = fileparse($_[0]);
+    pushd $path;
+    my $return = system "latexmk -pdf -interaction=nonstopmode -halt-on-error $base_name";
+    popd;
+    return $return;
+}

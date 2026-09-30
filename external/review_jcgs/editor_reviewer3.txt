@@ -1,0 +1,88 @@
+27-Sep-2026
+
+Dear Dr Guillermina Senn:
+
+Thank you for submitting your manuscript Bayesian Semi-Blind Deconvolution at Scale for possible publication in the Journal of Computational and Graphical Statistics.
+
+An Associate Editor (AE) and I have read your manuscript.  Although the topic is interesting, we do not believe that there is a sufficient contribution for publication in JCGS.
+
+Your manuscript may be better suited to one of Taylor & Francis’ other journals, and the Taylor & Francis editorial team might be in touch with some specific suggestions.
+
+I am sorry to give you this disappointing decision. With rapidly accelerating submission rate, JCGS can accept a relatively small proportion of submitted papers and inevitably this means we have to turn down a large number of articles containing publishable material.
+
+Thank you for allowing us to review your work. I warmly wish you the best in finding it a proper venue for publication and hope you will consider the Journal of Computational and Graphical Statistics for your publications in the future.
+ 
+Sincerely,
+
+Rebecca Killick
+
+Editor, Journal of Computational and Graphical Statistics
+killick@clemson.edu
+
+
+Reviewer(s)' Comments to Author:
+
+Reviewer: 1
+
+Comments to the Author
+Please see the attached comments.
+
+Reviewer: 2
+
+Comments to the Author
+See attached file.
+
+Reviewer: 3
+
+Comments to the Author
+The authors propose a Bayesian model and an associated MCMC approach to solve a semi-blind inverse problem motivated by applications in seismic imaging. Specifically, they focus on recovering c and w given observations d following the model
+
+d(s) = (c * w)(s) + e(s),
+
+where w is the blur kernel, c is the latent image, e denotes observational error, and s is on a 2D lattice.
+
+Moreover, they assume that side information is available about the latent image, i.e. Ac = b, where b is given and A is a matrix that selects the entries of c that are known.
+
+Comments:
+
+1) My main concern with the paper is the overlap with Senn et al. (2025) regarding the model formulation, and how the proposed work relates to previous marginalization-based samplers (e.g. Fox and Norton (2016)) and the partially collapsed Gibbs literature. It would also be useful to frame the paper within the broader inverse problems literature. Moreover, given that this is a statistical journal, some considerations about the identifiability of the model, at least via simulations, would strengthen the paper.
+
+2) The assumption that some values of c are observed without noise feels restrictive. To what extent can this be relaxed by assuming a noise model Ac + e_o = b?
+
+3) The model should be described in more detail in equations (1) and (2). It took some time to understand that the authors assume additional information is available in the form Ac = b. I think this is important because, to the best of my knowledge, "semi-blind" does not necessarily imply this, but may refer to parametric assumptions about the blur kernel.
+
+4) Assumptions introduced later, such as separability of the image covariance, should also be introduced when the model is first presented.
+
+5) Related to the previous comment, why do the authors assume that the covariance of c is separable as a Kronecker product of row and column covariances? This comes across as a restrictive assumption.
+
+6) How does the proposed model compare with directly assuming a reduced-basis blur kernel, for example using a spline basis?
+
+7) There appear to be two components to the proposed sampling approach: the HMC update and marginalization. In the simulations and comparisons, it would be useful to assess their benefits separately (in terms of accuracy and computing time). Given the small-scale simulation for the HMC component, it is unclear in which settings (e.g. for dimensions closer to real applications) the computational cost of HMC is justified.
+
+Minor comments:
+
+1) "Wavelet" appears to refer to the convolution kernel w here. It would be worth clarifying this early on, as readers from statistics might expect the term to refer to a wavelet decomposition.
+
+2) Hats are used for quantities in the Fourier domain. This can be confusing, as hats are usually used for estimated quantities in statistics.
+
+3) Page 9, line 6: \hat x is not defined.
+
+4) Page 9, line 32: It is ambiguous whether x is a matrix or a vector, since it is later indexed as x_ij, but its distribution is defined using a multivariate normal vector.
+
+5) It would be helpful to follow the notation of models (1) and (2) more closely, as part of the Preliminaries uses x and y instead.
+
+Editor's Comments to Author:
+
+Associate Editor
+Comments to the Author:
+While all three reviewers recognize the interest and value in developing scalable MCMC methods for Bayesian semi-blind deconvolution, they collectively raise significant questions regarding the manuscript's positioning, methodology, and scope relative to the readership of JCGS. After consideration of the manuscript and the referee evaluations, I agree with their assessment that the work is not yet ready for publication in JCGS.
+
+A central theme across the reviews involves the framing of the paper's novel contributions relative to Senn et al. (2025). The reviewers feel that a substantial portion of Sections 1–4 relies heavily on background material from the prior work, making it difficult to pinpoint the new methodological advances. While the introduction of the collapsed HMC update for the marginal blur parameter is a notable idea, the empirical results currently highlight its advantages only in specialized settings, and the reviewers felt a more comprehensive comparison against standard baselines is needed to establish its broader benefits.
+
+Additionally, the reviewers noted a mismatch between the general framing of the manuscript and its practical modeling assumptions. While presented as a broad semi-blind deconvolution framework, key elements (e.g. 1D convolution kernel, separable spatial priors, and specific row-observation structures) are tailored specifically to seismic applications and may be too restrictive for more general 2D image processing contexts. The reports also offer helpful technical feedback regarding the covariance specifications on cyclic lattices, along with minor typographical and indexing corrections in the spectral derivations that will be straightforward to clean up.
+
+While a rejection is necessary given the scope of revisions required for a general computational statistics journal, the referee reports provide detailed and constructive feedback. I strongly encourage the authors to utilize these insights to refine the work in preparation of submission elsewhere.
+
+
+
+SW - DL5

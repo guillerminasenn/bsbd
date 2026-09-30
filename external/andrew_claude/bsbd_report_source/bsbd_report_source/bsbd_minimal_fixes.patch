@@ -1,0 +1,49 @@
+diff --git a/src/classes/covariance.py b/src/classes/covariance.py
+index a9f3c5d..4941002 100644
+--- a/src/classes/covariance.py
++++ b/src/classes/covariance.py
+@@ -136,7 +136,7 @@ class Covariance():
+                     
+                  # If no base_R is passed, assume R=I
+                 else:
+-                    self.base_R = np.eye(self.n)[0, :].reshape(-1, 1)
++                    self.base_R = np.eye(1, self.n)[0, :].reshape(-1, 1)  # avoid allocating an n x n identity (17 GB at n=48000)
+                     self.base_Q = invert_circ(self.base_R)
+                     self.logdet_R = compute_log_det_circ(self.base_R)
+                     
+diff --git a/src/mcmc/update_blur_image/collapsedhmc/cyclic/gradient_potential.py b/src/mcmc/update_blur_image/collapsedhmc/cyclic/gradient_potential.py
+index ecf2e59..586287b 100644
+--- a/src/mcmc/update_blur_image/collapsedhmc/cyclic/gradient_potential.py
++++ b/src/mcmc/update_blur_image/collapsedhmc/cyclic/gradient_potential.py
+@@ -216,7 +216,10 @@ def gradient_potential_Fourier_domain(sampler, i, w_star):
+ 
+     ### Compute P_R_ch_starT and R_cv_star_W0t in the time domain, used to compute the gradient of SS
+     if _c.reflectivity_constraints['constr']:
+-        P = p.reshape((nv, nh), order='F')
++        # NOTE: reshape(order='F') of the (n,1) vector p returns a VIEW of p. gradient_SS_vectorized
++        # then runs np.fft.fft(P, axis=1, out=P) etc. in place, which overwrote p before it was
++        # used in `... @ p` (d_SS_1 part 1/2 and d_SS_2). Take a copy so p stays Sigma^-1 dbar.
++        P = p.reshape((nv, nh), order='F').copy()
+         R_ch_star = _c.reflectivity_constraints['Rh_star']
+         P_R_ch_starT = P @ (R_ch_star.T)
+         W0T = linalg.circulant(base_W0T.reshape(-1)).T 
+diff --git a/src/mcmc/update_blur_image/collapsedhmc/initialize.py b/src/mcmc/update_blur_image/collapsedhmc/initialize.py
+index 7257959..18a3700 100644
+--- a/src/mcmc/update_blur_image/collapsedhmc/initialize.py
++++ b/src/mcmc/update_blur_image/collapsedhmc/initialize.py
+@@ -190,10 +190,14 @@ def _create_momentum_object(sampler):
+     dim_p = _lik.lattice.nv - _w.wavelet_constraints['nr_constraints'] 
+ 
+     # Precondition?
+-    precondition = sampler.mcmc_config.get('precondition', None)
++    # NOTE: the option is stored under mcmc_config['collapsed_hmc'] (see _initialize_collapsed_hmc);
++    # reading it from the top level always gave None, i.e. an identity mass matrix.
++    precondition = sampler.mcmc_config['collapsed_hmc'].get('precondition', None)
+     if precondition == 'prior':
+         sigma2p = 1 / sampler.theta['sigma2w'][:, 0]
+         mass_correlation_matrix = _w.wavelet_constraints['inv_R_wu_star']
++        if hasattr(mass_correlation_matrix, 'toarray'):
++            mass_correlation_matrix = mass_correlation_matrix.toarray()  # stored as csr; Covariance() needs dense
+         print(f"Using prior preconditioning with mass_correlation_matrix shape: {mass_correlation_matrix.shape}") if verbose else None
+     else:
+         sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
