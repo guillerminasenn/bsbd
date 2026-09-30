@@ -286,7 +286,7 @@ class MCMC():
                     'history': np.zeros(N + 1),
                     'batch_ar': []
                 } for param in param_dict
-            } for method, param_dict in adapt_config.items()
+            } for method, param_dict in self.adapt_config.items()
         }
 
         # Create dictionary to store algorithm statistics

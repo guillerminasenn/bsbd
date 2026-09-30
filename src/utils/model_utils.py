@@ -267,8 +267,8 @@ def create_W(lattice, w_star, verbose=False, explicit=False):
     l = lattice.l
     r = lattice.r
     
-    # Make 0 the 0
-    w_star[np.abs(w_star) < 0.00000000001] = 0
+    # Make 0 the 0 (on a copy: the caller's array, e.g. the leapfrog position, must not be mutated)
+    w_star = np.where(np.abs(w_star) < 0.00000000001, 0, w_star)
     
     if lattice.topology == 'C': # Circular convolution 
         W0 = None
@@ -288,8 +288,8 @@ def create_W(lattice, w_star, verbose=False, explicit=False):
             
         one_vector = np.zeros((1, lattice.nh))
         one_vector[0, 0] = 1      
-        base_W = linalg.kron(one_vector, base_W0)       
-        base_WT = linalg.kron(one_vector, base_W0T)
+        base_W = np.kron(one_vector, base_W0)       
+        base_WT = np.kron(one_vector, base_W0T)
         
         # Create (sparse) explicit matrices W0 and W
         if explicit and lattice.n < 400:

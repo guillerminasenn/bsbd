@@ -1071,13 +1071,13 @@ class Wavelet(Gaussian):
 
                 bases_d_W0[:, i] = d_W0_i[0, :] 
                 bases_d_W0T[:, i] = d_W0T_i[0, :] 
-                base_d_W_i = linalg.kron(one_vector, bases_d_W0[:, i].reshape(-1, 1))
+                base_d_W_i = np.kron(one_vector, bases_d_W0[:, i].reshape(-1, 1))
                 base_d_WT_i = transpose_base_circ(base_d_W_i)
                 base_d_W.append(base_d_W_i) 
                 base_d_WT.append(base_d_WT_i) 
 
             if self.lattice.topology == 'E':
-                d_W_i = linalg.kron(np.eye(self.lattice.nh), d_W0_i)
+                d_W_i = np.kron(np.eye(self.lattice.nh), d_W0_i)
                 d_W.append(d_W_i)
 
         # Defaults for non-cyclic case

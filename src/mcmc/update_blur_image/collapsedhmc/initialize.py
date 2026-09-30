@@ -190,10 +190,14 @@ def _create_momentum_object(sampler):
     dim_p = _lik.lattice.nv - _w.wavelet_constraints['nr_constraints'] 
 
     # Precondition?
-    precondition = sampler.mcmc_config.get('precondition', None)
+    # NOTE: the option is stored under mcmc_config['collapsed_hmc'] (see _initialize_collapsed_hmc);
+    # reading it from the top level always gave None, i.e. an identity mass matrix.
+    precondition = sampler.mcmc_config['collapsed_hmc'].get('precondition', None)
     if precondition == 'prior':
         sigma2p = 1 / sampler.theta['sigma2w'][:, 0]
         mass_correlation_matrix = _w.wavelet_constraints['inv_R_wu_star']
+        if scipy.sparse.issparse(mass_correlation_matrix):
+            mass_correlation_matrix = mass_correlation_matrix.toarray()  # stored as csr; Covariance needs dense
         print(f"Using prior preconditioning with mass_correlation_matrix shape: {mass_correlation_matrix.shape}") if verbose else None
     else:
         sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
@@ -203,6 +207,9 @@ def _create_momentum_object(sampler):
     lattice_p = Lattice(nv_ava=dim_p, nh_ava=1, k=1, mv=0, mh=0, topology='E') 
     M = Covariance(lattice=lattice_p, sigma2=sigma2p, R=mass_correlation_matrix) 
     _p = Gaussian(Sigma=M)     
+
+    # Factorize the mass matrix once; kinetic / grad_kinetic reuse it at every leapfrog step
+    _p.Sigma.chol_R = linalg.cholesky(M.R, lower=True)
 
     # Store the momentum object in the sampler
     sampler.par_objs['p'] = _p

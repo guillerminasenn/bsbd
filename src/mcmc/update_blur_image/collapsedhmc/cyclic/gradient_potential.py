@@ -24,7 +24,7 @@ from src.mcmc.update_blur_image.collapsedhmc.cyclic.derivatives import gradient_
 
 pp = 6
 
-def gradient_potential_Fourier_domain(sampler, i, w_star):
+def gradient_potential_Fourier_domain(sampler, i, w_star, fix_aliasing=False):
     """Gradient of the potential 
 
         p(w*|d) = p(w*) p(d|w*) / Z 
@@ -44,6 +44,10 @@ def gradient_potential_Fourier_domain(sampler, i, w_star):
         Current iteration index.
     w_star: np.array k x 1 (if cyclic, k = nv)
         Current constrained wavelet coefficients vector.
+    fix_aliasing: bool (default=False)
+        If True, copy p before reshaping it into P. With the default (legacy
+        behaviour), P is a view of p and the in-place FFTs in
+        gradient_SS_vectorized corrupt p before it is used in `... @ p`.
         
     Return:
     ------
@@ -97,8 +101,8 @@ def gradient_potential_Fourier_domain(sampler, i, w_star):
     eigenvalues_Rch = _c.Sigma.fft_base_Rh 
     eigenvalues_Rc = _c.Sigma.fft_base_R 
 
-    ## Extract the Cholesky decomposition of inv(A_c @ R_c @ A_c')
-    L = _c.reflectivity_constraints['L']
+    ## Extract the Cholesky decomposition of inv(A_c @ R_c @ A_c') (only exists with constraints on c)
+    L = _c.reflectivity_constraints['L'] if constr_c else None
     
     ## Extract current state
     sigma2w = sampler.theta['sigma2w'][:, i + 1].item()
@@ -215,14 +219,16 @@ def gradient_potential_Fourier_domain(sampler, i, w_star):
     r, s, p = compute_r_s_p_Fourier_domain(sampler, d, inv_S, eigenvalues_W, eigs, verbose=verbose)
 
     ### Compute P_R_ch_starT and R_cv_star_W0t in the time domain, used to compute the gradient of SS
+    ### P is needed in gradient_SS_vectorized whether or not c is constrained.
+    P = p.reshape((nv, nh), order='F')
+    if fix_aliasing:
+        P = P.copy()  # reshape returns a view of p; gradient_SS_vectorized FFTs P in place
     if _c.reflectivity_constraints['constr']:
-        P = p.reshape((nv, nh), order='F')
         R_ch_star = _c.reflectivity_constraints['Rh_star']
         P_R_ch_starT = P @ (R_ch_star.T)
         W0T = linalg.circulant(base_W0T.reshape(-1)).T 
         R_cv_star_W0t = _c.reflectivity_constraints['Rv_star'] @ W0T
     else:
-        P = None
         R_ch_star = None
         P_R_ch_starT = None
         W0T = None

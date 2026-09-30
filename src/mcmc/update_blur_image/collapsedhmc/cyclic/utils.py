@@ -228,8 +228,8 @@ def kinetic(sampler, i, p, verbose=False):
     term1 = 0  # term1 = 0.5 * n * np.log(2 * math.pi) ; # cancels out in the acceptance ratio
     term2 = 0 # term2 = -0.5 * np.log(linalg.det(inv_Sigma)); cancels out in the acceptance ratio
     
-    # With Cholesky
-    chol_mass_matrix = linalg.cholesky(_p.Sigma.R, lower=True)
+    # With Cholesky (factorized once in _create_momentum_object)
+    chol_mass_matrix = _p.Sigma.chol_R
     y = linalg.solve_triangular(chol_mass_matrix, p, lower=True)
     term3 = 0.5 * y.T @ y / sigma2p
     
@@ -281,8 +281,8 @@ def grad_kinetic(sampler, i, p, verbose=False):
     else:
         sigma2p = sampler.mcmc_config['collapsed_hmc']['sigma2p']
     
-    # With Cholesky
-    chol_mass_matrix = linalg.cholesky(_p.Sigma.R, lower=True)
+    # With Cholesky (factorized once in _create_momentum_object)
+    chol_mass_matrix = _p.Sigma.chol_R
     y = linalg.solve_triangular(chol_mass_matrix, p, lower=True)
     grad = linalg.solve_triangular(chol_mass_matrix.T, y, lower=False) / sigma2p
     grad = grad.reshape((-1, 1))

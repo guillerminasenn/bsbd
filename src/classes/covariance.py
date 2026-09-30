@@ -136,7 +136,7 @@ class Covariance():
                     
                  # If no base_R is passed, assume R=I
                 else:
-                    self.base_R = np.eye(self.n)[0, :].reshape(-1, 1)
+                    self.base_R = np.eye(1, self.n)[0, :].reshape(-1, 1)  # avoid allocating an n x n identity
                     self.base_Q = invert_circ(self.base_R)
                     self.logdet_R = compute_log_det_circ(self.base_R)
                     
@@ -183,7 +183,7 @@ class Covariance():
             setattr(self, Q_1d_name,  Q_1d)
             
             if self.Rv is not None and self.Rh is not None:
-                self.R = linalg.kron(self.Rh, self.Rv)
+                self.R = np.kron(self.Rh, self.Rv)  # scipy.linalg.kron is deprecated/removed in recent SciPy
                 self.Q = linalg.inv(self.R)
                 self.logdet_R = math_utils.compute_log_det(self.R)
             
