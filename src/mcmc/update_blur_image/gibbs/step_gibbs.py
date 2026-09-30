@@ -12,7 +12,7 @@ from src.utils.efficient_algebra_utils import multiply_matrix_vector_circ
 from src.utils.sampling_utils import _correct_sample, _sample_circ, _sample_scipy
 
 def step_gibbs(sampler, i, update_blur=True, update_image=True):
-    """Gibbs update for the blur-kernel wavelet and image reflectivity.
+    r"""Gibbs update for the blur-kernel wavelet and image reflectivity.
 
     Parameters
     ----------
