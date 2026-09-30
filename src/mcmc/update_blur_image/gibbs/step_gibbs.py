@@ -4,14 +4,11 @@ Terminology: `c` is the image/reflectivity and `w` is the blur/wavelet.
 """
 
 # Third-party library imports
-import copy
-
 import numpy as np
 from scipy import linalg
 
 # Algorithm imports
-from src.utils.efficient_algebra_utils import build_matrix_circ
-from src.utils.model_utils import subset_AB, subset_ABA
+from src.utils.efficient_algebra_utils import multiply_matrix_vector_circ
 from src.utils.sampling_utils import _correct_sample, _sample_circ, _sample_scipy
 
 def step_gibbs(sampler, i, update_blur=True, update_image=True):
@@ -83,7 +80,7 @@ def step_gibbs(sampler, i, update_blur=True, update_image=True):
         sampler.aux['w'][:, i + 1] = np.squeeze(w_new)
 
         # Apply constraints if present
-        w_new_star = copy.deepcopy(w_new)
+        w_new_star = w_new
         if _blur.wavelet_constraints['nr_constraints'] > 0:
             if verbose:
                 print("Applying blur constraints...")
@@ -91,15 +88,15 @@ def step_gibbs(sampler, i, update_blur=True, update_image=True):
             # Load constraints
             b = _blur.wavelet_constraints['b']
             A = _blur.wavelet_constraints['A']
+            non_zero_cols = np.flatnonzero(A.getnnz(axis=0) > 0)
 
-            # Compute RAt and ARAt
+            # Gather the constrained columns of R_cond; column q of circ(base).T is roll(brev, q)
             if R_cond is None:
-                # NOTE: can be done more efficiently with subset_AB
-                R_cond = build_matrix_circ(base_R_cond)
-
-            # Subset non-zero columns
-            non_zero_cols = A.getnnz(axis=0) > 0
-            RAt = R_cond[:, non_zero_cols]
+                base = base_R_cond.reshape(-1)
+                brev = np.roll(base[::-1], 1)
+                RAt = np.stack([np.roll(brev, q) for q in non_zero_cols], axis=1)
+            else:
+                RAt = R_cond[:, non_zero_cols]
             ARAt = RAt[non_zero_cols, :]
 
             # Correct the sample (same approach for both Euclidean and cyclic topologies because small dims)
@@ -172,15 +169,23 @@ def step_gibbs(sampler, i, update_blur=True, update_image=True):
                 if verbose:
                     print("Correcting image sample on cyclic lattice...")
 
-                # Compute RAt and ARAt
-                ARAt = subset_ABA(base_R_cond, _image)
+                # A_c R A_c' is a gather of the diagonal-block base (the well pixels lie in one column)
+                nv = sampler.lattice.nv
+                rows = _image.lattice.well_positions['rows_cyclic']
+                well_coords_vec = _image.lattice.well_positions['well_coords_vec']
+                ARAt = base_R_cond[:, 0][(rows[None, :] - rows[:, None]) % nv]
                 ARAt = 0.5 * (ARAt + ARAt.T)  # Ensure symmetry
-                RAt = subset_AB(base_R_cond, _image).T
-                inv_ARAt = linalg.inv(ARAt)  
-                inv_ARAt = 0.5 * (inv_ARAt + inv_ARAt.T)  # Ensure symmetry              
 
-                # Correct the sample
-                c_new_star = _correct_sample(c_new, b, A, inv_ARAt, RAt, verbose)
+                # One Cholesky solve for inv(ARAt) @ (A_c c - b)
+                Ac_b = c_new[well_coords_vec, :].reshape(-1, 1) - b.reshape(-1, 1)
+                chol_ARAt = linalg.cholesky(ARAt, lower=True)
+                z = linalg.solve_triangular(
+                    chol_ARAt.T, linalg.solve_triangular(chol_ARAt, Ac_b, lower=True), lower=False)
+
+                # R A_c' z: scatter z onto the well coordinates, then one FFT mat-vec
+                z_up = np.zeros((_image.lattice.n, 1))
+                z_up[well_coords_vec] = z
+                c_new_star = c_new - multiply_matrix_vector_circ(base_R_cond, z_up)
                 if verbose:
                     print(f"Corrected reflectivity sample (first 5): {c_new_star[:5]}")   
 

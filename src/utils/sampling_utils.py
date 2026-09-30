@@ -23,19 +23,15 @@ def _sample_circ(mean, sigma2, base_R, verbose=False):
         nv = base_R.shape[0]
         nh = base_R.shape[1]
         n = nv * nh
-        gaussian = stats.multivariate_normal()
-        z = np.ndarray(n, dtype=np.complex128)
-        z.real = gaussian.rvs(n)
-        z.imag = gaussian.rvs(n)
+        z = np.empty(n, dtype=np.complex128)
+        z.real = np.random.standard_normal(n)
+        z.imag = np.random.standard_normal(n)
         Z = z.reshape((nv, nh))                                                             
         Lambda = np.sqrt(n) * np.fft.fft2((sigma2 * base_R), norm='ortho')
         internal_term = np.power(Lambda, 0.5) * Z
         v = np.fft.fft2(internal_term, norm='ortho')
         v_real = np.real(v).reshape((n, 1), order='F')
         x = mean.reshape((n, 1)) + v_real
-        # if verbose:
-        #     print(f"Sampled from cyclic lattice: {x.reshape((nv, nh), order='F')}")
-
 
         # Reshape x into (1,1) np.array if it only contains one element
         if not x.shape:
@@ -80,24 +76,11 @@ def _correct_sample(x, b, A, inv_ARAt, RAt, verbose=False):
         (optional) The matrix R @ A'.
     """
     
-    # Compute the corrected sample (old)
+    # Compute the corrected sample
     vector = (A.dot(x.reshape(-1, 1))).reshape(-1, 1) - b.reshape(-1, 1)
     right_term = inv_ARAt @ vector
     x_correction = RAt @ right_term   
     x_star = x - x_correction  
-
-    # Compute the corrected sample (without inversion)
-    non_zero_cols = A.getnnz(axis=0) > 0 # Extract indexes of non-zero columns of A
-    Ax = x[non_zero_cols, :].reshape(-1, 1)
-    Ax_b = Ax - b.reshape(-1, 1)
-    ARAt = A @ RAt
-    cholesky_ARAt = linalg.cholesky(ARAt, lower=True)
-    y = linalg.solve_triangular(cholesky_ARAt, Ax_b, lower=True)
-    z = linalg.solve_triangular(cholesky_ARAt.T, y, lower=False)
-    x_correction_noinv = RAt @ z
-    x_star_noinv = x - x_correction_noinv
-    if verbose:
-        print(f"Max difference between corrected samples (with and without inversion): {np.max(np.abs(x_star - x_star_noinv))}\n")
     
     # Reshape x_star into (1,1) np.array if it only contains one element
     if not x_star.shape:
