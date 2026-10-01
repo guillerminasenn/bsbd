@@ -1,8 +1,9 @@
 # Plan: fix and speed up collapsed HMC, speed up Gibbs, re-run synthetic ESS experiments
 
 Date: 2026-09-30
-Branch: `hmc-fixes-and-speedup` (current code stays untouched on the current branch)
-Status: planned, not started
+Branch: `hmc-fixes-and-speedup`
+Status: Phases 0--5 complete; Phase 6 tooling and laptop pilots complete; full sweeps deferred; Phase 7 pending.
+Handoff: `reports/notes/hmc_fixes_handoff.md` (updated 2026-10-01).
 
 ## 1. Background
 
